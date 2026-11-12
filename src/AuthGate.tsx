@@ -119,6 +119,20 @@ function BackgroundMusic() {
 
   useEffect(() => {
     let disposed = false;
+    const startSoundFromGesture = () => {
+      const player = playerRef.current;
+      if (!player || soundOnRef.current) return;
+      player.setVolume(100);
+      player.unMute();
+      player.playVideo();
+      soundOnRef.current = true;
+      setSoundOn(true);
+      setAutoplayBlocked(false);
+    };
+
+    document.addEventListener("pointerdown", startSoundFromGesture, true);
+    document.addEventListener("keydown", startSoundFromGesture, true);
+
     const initialOrder = shuffleSongs();
     queueRef.current = initialOrder;
     queuePositionRef.current = 0;
@@ -191,6 +205,8 @@ function BackgroundMusic() {
 
     return () => {
       disposed = true;
+      document.removeEventListener("pointerdown", startSoundFromGesture, true);
+      document.removeEventListener("keydown", startSoundFromGesture, true);
       if (replayTimerRef.current) clearTimeout(replayTimerRef.current);
       playerRef.current?.destroy();
       playerRef.current = null;
@@ -238,7 +254,7 @@ function BackgroundMusic() {
           <span aria-hidden="true">↶</span><span>REPLAY <small>· PREV ×2</small></span>
         </button>
         <span className="access-volume-status">
-          {soundOn ? "SOUND ON · 100%" : autoplayBlocked ? "AUTOPLAY BLOCKED BY BROWSER" : ready ? "STARTING SOUND · 100%" : "LOADING VIDEO"}
+          {soundOn ? "SOUND ON · 100%" : autoplayBlocked ? "CLICK OR TAP THE PAGE FOR SOUND" : ready ? "STARTING SOUND · 100%" : "LOADING VIDEO"}
         </span>
         <button type="button" className="access-track-button access-track-next" onClick={handleNext} disabled={!ready} aria-label="Skip to next shuffled track">
           <span>SKIP</span><span aria-hidden="true">↠</span>
