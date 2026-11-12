@@ -554,9 +554,12 @@ export function CordApp() {
   };
 
   const handleSkip = () => {
+    // A manual or automatic skip enables shuffle and picks another track.
+    setShuffleMode(true);
     let nextIndex = currentSongIndex + 1;
-    if (shuffleMode) {
-      nextIndex = Math.floor(Math.random() * songQueue.length);
+    if (songQueue.length > 1) {
+      const choices = songQueue.map((_, index) => index).filter(index => index !== currentSongIndex);
+      nextIndex = choices[Math.floor(Math.random() * choices.length)];
     } else if (nextIndex >= songQueue.length) {
       if (repeatMode) {
         nextIndex = 0;
