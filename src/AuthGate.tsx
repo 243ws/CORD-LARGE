@@ -360,7 +360,13 @@ export default function AuthGate() {
   useEffect(() => {
     fetch("/api/access/session", { credentials: "same-origin" })
       .then((response) => response.json())
-      .then(setSession)
+      .then((result: SessionState) => {
+        if (result.authenticated) {
+          window.history.replaceState(null, "", "/download");
+          setShowDownloadPage(true);
+        }
+        setSession(result);
+      })
       .catch(() => setSession({ authenticated: false }));
   }, []);
 
@@ -377,13 +383,8 @@ export default function AuthGate() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not sign in.");
-      if (mode === "signup") {
-        window.history.replaceState(null, "", "/download");
-        setShowDownloadPage(true);
-      } else if (window.location.pathname === "/download") {
-        window.history.replaceState(null, "", "/");
-        setShowDownloadPage(false);
-      }
+      window.history.replaceState(null, "", "/download");
+      setShowDownloadPage(true);
       setSession(result);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not sign in. Try again.");
@@ -417,7 +418,7 @@ export default function AuthGate() {
             <p className="download-copy">
               Get the Windows app in one file. It includes the runtime and checks for published module updates when you open it.
             </p>
-            <a className="download-primary" href="https://github.com/243ws/SlendoCord-Updates/releases/latest/download/SlendoCord.exe">
+            <a className="download-primary" href="/downloads/SlendoCord.exe" download="SlendoCord.exe">
               Download SlendoCord.exe
             </a>
             <p className="download-note">No separate Node.js installation or project folder is needed. Internet access is required to check for updates.</p>
