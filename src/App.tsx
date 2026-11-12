@@ -150,7 +150,7 @@ const discordGuildUserAssetUrl = (
   return `https://cdn.discordapp.com/guilds/${guildId}/users/${userId}/${kind}/${hash}.${discordAssetExt(hash)}?size=1024`;
 };
 
-export default function App() {
+export function CordApp() {
   // Refs
   const playerRef = useRef<any>(null);
   const gcIntervalRef = useRef<NodeJS.Timeout | null>(null);

@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+cord-auth.sqlite*
+auth-test.sqlite*
