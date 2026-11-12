@@ -225,7 +225,7 @@
   .access-submit, .access-form input { transition: none; }
 }
 
-.download-screen { --access-red: #ff263f; --access-red-soft: rgba(255, 38, 63, .16); position: fixed; inset: 0; display: grid; place-items: center; overflow: auto; padding: 64px 18px; color: #f6f4f5; background: radial-gradient(ellipse at 50% 46%, rgba(86, 12, 26, .22), transparent 38%), linear-gradient(145deg, #080709, #10090d 55%, #070709); font-family: Inter, ui-sans-serif, system-ui, sans-serif; z-index: 10000; }
+.download-screen { --access-red: #ff263f; --access-red-soft: rgba(255, 38, 63, .16); position: fixed; inset: 0; box-sizing: border-box; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; overflow: auto; padding: 24px 18px; color: #f6f4f5; background: radial-gradient(ellipse at 50% 46%, rgba(86, 12, 26, .22), transparent 38%), linear-gradient(145deg, #080709, #10090d 55%, #070709); font-family: Inter, ui-sans-serif, system-ui, sans-serif; z-index: 10000; }
 .download-card { position: relative; z-index: 1; width: min(100%, 520px); box-sizing: border-box; padding: 42px; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: linear-gradient(160deg, rgba(24,18,22,.98), rgba(11,10,13,.99)); box-shadow: 0 26px 100px rgba(0,0,0,.55), 0 0 55px rgba(255,38,63,.1); text-align: center; }
 .download-card .access-mark { margin: 0 auto 24px; }
 .download-card .access-kicker { letter-spacing: .14em; }
@@ -241,4 +241,12 @@
 
 @media (max-width: 520px) {
   .download-card { padding: 32px 24px; }
+}
+
+@media (max-height: 620px) {
+  .download-screen { padding-block: 12px; }
+  .download-card { padding-block: 28px; }
+  .download-card .access-mark { margin-bottom: 16px; }
+  .download-copy { margin-bottom: 16px; }
+  .download-divider { margin-block: 17px 12px; }
 }
