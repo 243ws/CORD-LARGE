@@ -265,6 +265,88 @@ function BackgroundMusic() {
   );
 }
 
+function DownloadPageMusic() {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<YoutubePlayer | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    const enableAudio = () => {
+      const player = playerRef.current;
+      if (!player) return;
+      player.setVolume(100);
+      player.unMute();
+      player.playVideo();
+    };
+    document.addEventListener("pointerdown", enableAudio, true);
+    document.addEventListener("keydown", enableAudio, true);
+
+    const initializePlayer = () => {
+      if (disposed || !mountRef.current || !window.YT?.Player || playerRef.current) return;
+      playerRef.current = new window.YT.Player(mountRef.current, {
+        width: "200",
+        height: "200",
+        videoId: "1k8fBOOOajI",
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          enablejsapi: 1,
+          fs: 0,
+          loop: 1,
+          origin: window.location.origin,
+          playlist: "1k8fBOOOajI",
+          playsinline: 1,
+          rel: 0,
+        },
+        events: {
+          onReady: (event: { target: YoutubePlayer }) => {
+            event.target.setVolume(100);
+            event.target.unMute();
+            event.target.playVideo();
+          },
+          onStateChange: (event: { data: number }) => {
+            if (event.data === window.YT?.PlayerState.ENDED) {
+              playerRef.current?.seekTo(0, true);
+              playerRef.current?.playVideo();
+            }
+          },
+          onAutoplayBlocked: (event: { target: YoutubePlayer }) => {
+            event.target.mute();
+            event.target.playVideo();
+          },
+        },
+      });
+    };
+
+    if (window.YT?.Player) {
+      initializePlayer();
+    } else {
+      const previousReadyHandler = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        previousReadyHandler?.();
+        initializePlayer();
+      };
+      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+        const script = document.createElement("script");
+        script.src = "https://www.youtube.com/iframe_api";
+        script.async = true;
+        document.head.appendChild(script);
+      }
+    }
+
+    return () => {
+      disposed = true;
+      document.removeEventListener("pointerdown", enableAudio, true);
+      document.removeEventListener("keydown", enableAudio, true);
+      playerRef.current?.destroy();
+      playerRef.current = null;
+    };
+  }, []);
+
+  return <div className="download-audio-player" ref={mountRef} aria-hidden="true" />;
+}
+
 export default function AuthGate() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [showDownloadPage, setShowDownloadPage] = useState(() => window.location.pathname === "/download");
@@ -327,8 +409,7 @@ export default function AuthGate() {
       </button>
       {showDownloadPage ? (
         <main className="download-screen">
-          <div className="access-orbit access-orbit-one" />
-          <div className="access-orbit access-orbit-two" />
+          <DownloadPageMusic />
           <section className="download-card" aria-labelledby="download-title">
             <div className="access-mark" aria-hidden="true"><span>SC</span></div>
             <div className="access-kicker">ACCOUNT READY · LIVE UPDATE BUILD</div>
