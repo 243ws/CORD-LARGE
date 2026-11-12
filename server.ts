@@ -6,6 +6,8 @@ import { OAuth2Client } from "google-auth-library";
 import dotenv from "dotenv";
 import http from "http";
 import { WebSocketServer } from "ws";
+import Database from "better-sqlite3";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 dotenv.config();
 
@@ -14,6 +16,143 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 app.use(cookieParser());
+
+// Invite-only access gate for this local testing copy. Invite codes are stored
+// as hashes and consumed once; passwords are salted and derived with scrypt.
+const authDb = new Database("cord-auth.sqlite");
+authDb.pragma("journal_mode = WAL");
+authDb.exec(`
+  CREATE TABLE IF NOT EXISTS access_users (
+    username TEXT PRIMARY KEY,
+    password_salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS access_invites (
+    code_hash TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    used_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS access_sessions (
+    token_hash TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+`);
+
+const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
+const sessionCookie = "cord_test_session";
+const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
+const cookieOptions = {
+  httpOnly: true,
+  sameSite: "strict" as const,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: sessionDurationMs,
+};
+
+const insertInvite = authDb.prepare("INSERT OR IGNORE INTO access_invites (code_hash, created_at) VALUES (?, ?)");
+for (const invite of (process.env.LOGIN_INVITE_CODES || "").split(",").map((part) => part.trim()).filter(Boolean)) {
+  insertInvite.run(hashToken(invite), Date.now());
+}
+
+const accessAttempts = new Map<string, { count: number; resetAt: number }>();
+function allowAccessAttempt(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = req.ip || "unknown";
+  const now = Date.now();
+  const previous = accessAttempts.get(ip);
+  const state = !previous || previous.resetAt <= now ? { count: 0, resetAt: now + 10 * 60 * 1000 } : previous;
+  state.count += 1;
+  accessAttempts.set(ip, state);
+  if (state.count > 20) return res.status(429).json({ error: "Too many attempts. Wait a few minutes and try again." });
+  next();
+}
+
+function issueAccessSession(username: string, res: express.Response) {
+  const token = randomBytes(32).toString("base64url");
+  authDb.prepare("INSERT INTO access_sessions (token_hash, username, expires_at) VALUES (?, ?, ?)")
+    .run(hashToken(token), username, Date.now() + sessionDurationMs);
+  res.cookie(sessionCookie, token, cookieOptions);
+}
+
+app.get("/api/access/session", (req, res) => {
+  const token = req.cookies[sessionCookie];
+  if (!token) return res.json({ authenticated: false });
+  const session = authDb.prepare("SELECT username, expires_at FROM access_sessions WHERE token_hash = ?")
+    .get(hashToken(token)) as { username: string; expires_at: number } | undefined;
+  if (!session || session.expires_at <= Date.now()) {
+    if (session) authDb.prepare("DELETE FROM access_sessions WHERE token_hash = ?").run(hashToken(token));
+    res.clearCookie(sessionCookie, { httpOnly: true, sameSite: "strict", secure: process.env.NODE_ENV === "production", path: "/" });
+    return res.json({ authenticated: false });
+  }
+  return res.json({ authenticated: true, username: session.username });
+});
+
+app.post("/api/access/signup", allowAccessAttempt, (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim() : "";
+  if (!/^[a-z0-9_-]{3,24}$/.test(username)) return res.status(400).json({ error: "Choose a username with 3–24 letters, numbers, dashes, or underscores." });
+  if (password.length < 12) return res.status(400).json({ error: "Use a password with at least 12 characters." });
+  if (!inviteCode) return res.status(400).json({ error: "An invite code is required. Ask the owner for one." });
+
+  const inviteHash = hashToken(inviteCode);
+  const invite = authDb.prepare("SELECT code_hash FROM access_invites WHERE code_hash = ? AND used_at IS NULL").get(inviteHash);
+  if (!invite) return res.status(403).json({ error: "That invite code is invalid or already used." });
+  if (authDb.prepare("SELECT 1 FROM access_users WHERE username = ?").get(username)) {
+    return res.status(409).json({ error: "That username is already taken." });
+  }
+
+  const salt = randomBytes(16).toString("hex");
+  const passwordHash = scryptSync(password, salt, 64).toString("hex");
+  const createAccount = authDb.transaction(() => {
+    authDb.prepare("INSERT INTO access_users (username, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?)")
+      .run(username, salt, passwordHash, Date.now());
+    const used = authDb.prepare("UPDATE access_invites SET used_at = ? WHERE code_hash = ? AND used_at IS NULL")
+      .run(Date.now(), inviteHash);
+    if (used.changes !== 1) throw new Error("Invite code was already used");
+  });
+  try {
+    createAccount();
+    issueAccessSession(username, res);
+    return res.status(201).json({ authenticated: true, username });
+  } catch (error) {
+    console.error("Account creation failed:", error);
+    return res.status(409).json({ error: "Could not create the account. Check the username and invite code." });
+  }
+});
+
+app.post("/api/access/login", allowAccessAttempt, (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const user = authDb.prepare("SELECT password_salt, password_hash FROM access_users WHERE username = ?")
+    .get(username) as { password_salt: string; password_hash: string } | undefined;
+  const attemptedHash = scryptSync(password || "invalid", user?.password_salt || "cord-test-login-salt", 64);
+  const expectedHash = Buffer.from(user?.password_hash || "0".repeat(128), "hex");
+  if (!user || !timingSafeEqual(attemptedHash, expectedHash)) {
+    return res.status(401).json({ error: "Username or password is incorrect." });
+  }
+  issueAccessSession(username, res);
+  return res.json({ authenticated: true, username });
+});
+
+app.post("/api/access/logout", (req, res) => {
+  const token = req.cookies[sessionCookie];
+  if (token) authDb.prepare("DELETE FROM access_sessions WHERE token_hash = ?").run(hashToken(token));
+  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: "strict", secure: process.env.NODE_ENV === "production", path: "/" });
+  return res.json({ authenticated: false });
+});
+
+// Protect the app's API endpoints. The client bundle only exposes the login gate;
+// app features and their data endpoints require a valid server session.
+app.use("/api", (req, res, next) => {
+  const token = req.cookies[sessionCookie];
+  if (!token) return res.status(401).json({ error: "Please sign in to continue." });
+  const session = authDb.prepare("SELECT username FROM access_sessions WHERE token_hash = ? AND expires_at > ?")
+    .get(hashToken(token), Date.now());
+  if (!session) return res.status(401).json({ error: "Please sign in to continue." });
+  next();
+});
 
 // Google OAuth Configuration
 const googleClient = new OAuth2Client(
