@@ -147,10 +147,10 @@ app.post("/api/access/logout", (req, res) => {
 // app features and their data endpoints require a valid server session.
 app.use("/api", (req, res, next) => {
   const token = req.cookies[sessionCookie];
-  if (!token) return res.status(401).json({ error: "Please sign in to continue." });
+  if (!token) return res.status(401).json({ code: "APP_SESSION_REQUIRED", error: "Please sign in to continue." });
   const session = authDb.prepare("SELECT username FROM access_sessions WHERE token_hash = ? AND expires_at > ?")
     .get(hashToken(token), Date.now());
-  if (!session) return res.status(401).json({ error: "Please sign in to continue." });
+  if (!session) return res.status(401).json({ code: "APP_SESSION_REQUIRED", error: "Please sign in to continue." });
   next();
 });
 

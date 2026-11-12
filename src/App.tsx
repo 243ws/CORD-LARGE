@@ -187,6 +187,9 @@ export function CordApp() {
   const [hasEntered, setHasEntered] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('normal');
   const [token, setToken] = useState('');
+  const [tokenStatus, setTokenStatus] = useState<
+    'idle' | 'checking' | 'connected' | 'rejected' | 'session-expired' | 'unavailable'
+  >('idle');
   const [channelId, setChannelId] = useState('');
   const [userId, setUserId] = useState('');
   const [currentUser, setCurrentUser] = useState<DiscordUser | null>(null);
@@ -554,9 +557,12 @@ export function CordApp() {
   };
 
   const handleSkip = () => {
+    // A manual or automatic skip enables shuffle and picks another track.
+    setShuffleMode(true);
     let nextIndex = currentSongIndex + 1;
-    if (shuffleMode) {
-      nextIndex = Math.floor(Math.random() * songQueue.length);
+    if (songQueue.length > 1) {
+      const choices = songQueue.map((_, index) => index).filter(index => index !== currentSongIndex);
+      nextIndex = choices[Math.floor(Math.random() * choices.length)];
     } else if (nextIndex >= songQueue.length) {
       if (repeatMode) {
         nextIndex = 0;
@@ -733,29 +739,57 @@ export function CordApp() {
 
   // Fetch User on Token Change
   useEffect(() => {
+    let cancelled = false;
     if (!token) {
       setCurrentUser(null);
+      setUserId('');
       setGuilds([]);
       setDms([]);
-      return;
+      setTokenStatus('idle');
+      return () => {
+        cancelled = true;
+      };
     }
+    setTokenStatus('checking');
     const fetchInitialData = async () => {
+      let verified = false;
+      const isAppSessionFailure = async (response: Response) => {
+        if (response.status !== 401) return false;
+        const errorData = await response.clone().json().catch(() => null);
+        if (errorData?.code !== 'APP_SESSION_REQUIRED') return false;
+        if (!cancelled) setTokenStatus('session-expired');
+        return true;
+      };
       try {
         const userRes = await fetch('https://discord.com/api/v9/users/@me', {
           headers: { 'Authorization': token }
         });
+        if (cancelled) return;
         if (userRes.ok) {
           const userData = await userRes.json();
+          if (cancelled) return;
           setCurrentUser(userData);
           setUserId(userData.id);
+          setTokenStatus('connected');
+          verified = true;
         } else {
           setCurrentUser(null);
+          setUserId('');
+          if (await isAppSessionFailure(userRes)) return;
+          if (cancelled) return;
+          if (userRes.status === 401) {
+            setTokenStatus('rejected');
+          } else {
+            setTokenStatus('unavailable');
+          }
           return;
         }
 
         const guildsRes = await fetch('https://discord.com/api/v9/users/@me/guilds', {
           headers: { 'Authorization': token }
         });
+        if (cancelled) return;
+        if (await isAppSessionFailure(guildsRes)) return;
         if (guildsRes.ok) {
           setGuilds(await guildsRes.json());
         }
@@ -763,15 +797,23 @@ export function CordApp() {
         const dmsRes = await fetch('https://discord.com/api/v9/users/@me/channels', {
           headers: { 'Authorization': token }
         });
+        if (cancelled) return;
+        if (await isAppSessionFailure(dmsRes)) return;
         if (dmsRes.ok) {
           const dmsData = await dmsRes.json();
           setDms(dmsData.filter((c: any) => c.type === 1 || c.type === 3));
         }
       } catch (e) {
-        console.error(e);
+        if (!cancelled) {
+          if (!verified) setTokenStatus('unavailable');
+          console.error(e);
+        }
       }
     };
     fetchInitialData();
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   const fetchGuildChannels = async (guildId: string) => {
@@ -2062,7 +2104,21 @@ export function CordApp() {
                 <span className="text-xs font-medium">{currentUser.username}</span>
               </div>
             ) : (
-              <div className="text-[10px] uppercase tracking-widest text-white/40">Not Connected</div>
+              <div
+                className={`text-[10px] uppercase tracking-widest ${
+                  tokenStatus === 'rejected' || tokenStatus === 'session-expired' || tokenStatus === 'unavailable'
+                    ? 'text-amber-300'
+                    : 'text-white/40'
+                }`}
+                role="status"
+                aria-live="polite"
+              >
+                {tokenStatus === 'checking' && 'Checking Token'}
+                {tokenStatus === 'rejected' && 'Discord 401'}
+                {tokenStatus === 'session-expired' && 'App Session Expired'}
+                {tokenStatus === 'unavailable' && 'API Request Failed'}
+                {tokenStatus === 'idle' && 'Not Connected'}
+              </div>
             )}
           </div>
         </div>
@@ -2133,6 +2189,25 @@ export function CordApp() {
                 placeholder="Enter Discord Token..."
                 className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 transition-colors"
               />
+              {tokenStatus !== 'idle' && (
+                <p
+                  className={`text-[10px] ${
+                    tokenStatus === 'connected'
+                      ? 'text-emerald-400'
+                      : tokenStatus === 'checking'
+                        ? 'text-white/40'
+                        : 'text-amber-300'
+                  }`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  {tokenStatus === 'checking' && 'Checking Discord connection…'}
+                  {tokenStatus === 'connected' && 'Discord account connected.'}
+                  {tokenStatus === 'rejected' && 'Discord returned 401 for this token.'}
+                  {tokenStatus === 'session-expired' && 'App sign-in expired; sign in again to use the proxy.'}
+                  {tokenStatus === 'unavailable' && 'Could not verify the token: the API or proxy request failed.'}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] uppercase font-bold text-red-500/60 tracking-wider flex items-center gap-2">
@@ -4073,7 +4148,7 @@ export function CordApp() {
                             <h4 className="text-[10px] font-bold uppercase tracking-wider text-white/60">About Me</h4>
                             <div className="bg-black/40 rounded-lg p-3 border border-white/5">
                               <p className="text-xs text-white/80 leading-relaxed whitespace-pre-wrap">
-                                𖤐 | gg/slendo
+                                𖤐 | I'm retired.
                               </p>
                             </div>
                           </div>
@@ -4093,10 +4168,6 @@ export function CordApp() {
                           <p className="text-white/80">Updates will be coming soon if needed or if I get ideas.</p>
                           <p className="text-white/80"><span className="text-red-500">v1.0.0</span> is the current version you are using — more versions may come soon.</p>
                           <p className="text-white/80">I hope you enjoy my cord.</p>
-                        </div>
-
-                        <div className="pt-2">
-                          <p className="text-xs text-white font-bold">LET'S PACK 😂 jokes. Na fr come pack wit me <span className="text-red-500">🔥</span></p>
                         </div>
                       </div>
                     </div>
