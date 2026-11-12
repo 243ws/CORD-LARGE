@@ -267,6 +267,7 @@ function BackgroundMusic() {
 
 export default function AuthGate() {
   const [session, setSession] = useState<SessionState | null>(null);
+  const [showDownloadPage, setShowDownloadPage] = useState(() => window.location.pathname === "/download");
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -294,6 +295,13 @@ export default function AuthGate() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not sign in.");
+      if (mode === "signup") {
+        window.history.replaceState(null, "", "/download");
+        setShowDownloadPage(true);
+      } else if (window.location.pathname === "/download") {
+        window.history.replaceState(null, "", "/");
+        setShowDownloadPage(false);
+      }
       setSession(result);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not sign in. Try again.");
@@ -304,6 +312,8 @@ export default function AuthGate() {
 
   async function logout() {
     await fetch("/api/access/logout", { method: "POST", credentials: "same-origin" });
+    window.history.replaceState(null, "", "/");
+    setShowDownloadPage(false);
     setSession({ authenticated: false });
     setPassword("");
   }
@@ -315,7 +325,36 @@ export default function AuthGate() {
       <button className="access-signout" onClick={logout} type="button" title={`Signed in as ${session.username}`}>
         <span aria-hidden="true">←</span> SIGN OUT
       </button>
-      <CordApp />
+      {showDownloadPage ? (
+        <main className="download-screen">
+          <div className="access-orbit access-orbit-one" />
+          <div className="access-orbit access-orbit-two" />
+          <section className="download-card" aria-labelledby="download-title">
+            <div className="access-mark" aria-hidden="true"><span>SC</span></div>
+            <div className="access-kicker">ACCOUNT READY · LIVE UPDATE BUILD</div>
+            <h1 id="download-title">Download SlendoCord</h1>
+            <p className="download-copy">
+              Get the Windows app in one file. It includes the runtime and checks for published module updates when you open it.
+            </p>
+            <a className="download-primary" href="https://github.com/243ws/SlendoCord-Updates/releases/latest/download/SlendoCord.exe">
+              Download SlendoCord.exe
+            </a>
+            <p className="download-note">No separate Node.js installation or project folder is needed. Internet access is required to check for updates.</p>
+            <div className="download-divider"><span>OR PREVIEW IN YOUR BROWSER</span></div>
+            <button
+              className="download-preview"
+              type="button"
+              onClick={() => {
+                window.history.replaceState(null, "", "/");
+                setShowDownloadPage(false);
+              }}
+            >
+              Preview Cord
+            </button>
+          </section>
+          <div className="access-footer">SLENDO CORD <span>—</span> DOWNLOAD & PREVIEW</div>
+        </main>
+      ) : <CordApp />}
     </>;
   }
 
