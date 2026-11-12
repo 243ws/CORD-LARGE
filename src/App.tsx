@@ -4073,7 +4073,7 @@ export function CordApp() {
                             <h4 className="text-[10px] font-bold uppercase tracking-wider text-white/60">About Me</h4>
                             <div className="bg-black/40 rounded-lg p-3 border border-white/5">
                               <p className="text-xs text-white/80 leading-relaxed whitespace-pre-wrap">
-                                𖤐 | gg/slendo
+                                𖤐 | I'm retired.
                               </p>
                             </div>
                           </div>
@@ -4093,10 +4093,6 @@ export function CordApp() {
                           <p className="text-white/80">Updates will be coming soon if needed or if I get ideas.</p>
                           <p className="text-white/80"><span className="text-red-500">v1.0.0</span> is the current version you are using — more versions may come soon.</p>
                           <p className="text-white/80">I hope you enjoy my cord.</p>
-                        </div>
-
-                        <div className="pt-2">
-                          <p className="text-xs text-white font-bold">LET'S PACK 😂 jokes. Na fr come pack wit me <span className="text-red-500">🔥</span></p>
                         </div>
                       </div>
                     </div>
