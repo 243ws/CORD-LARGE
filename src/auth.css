@@ -98,9 +98,23 @@
 .access-spinner { width: 15px; height: 15px; border: 2px solid #45363a; border-top-color: #ff263f; border-radius: 50%; animation: access-spin .7s linear infinite; }
 .access-signout { position: fixed; z-index: 9998; top: 10px; right: 12px; padding: 8px 11px; border: 1px solid rgba(255,255,255,.2); border-radius: 7px; background: rgba(10,9,11,.9); color: #ece8eb; cursor: pointer; font: 11px Inter, ui-sans-serif, sans-serif; }
 .access-online-dot { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: #57cf87; box-shadow: 0 0 8px rgba(87,207,135,.6); }
+.download-screen { --access-red: #ff263f; --access-red-soft: rgba(255, 38, 63, .16); position: fixed; inset: 0; display: grid; place-items: center; overflow: auto; padding: 64px 18px; color: #f6f4f5; background: radial-gradient(ellipse at 50% 46%, rgba(86, 12, 26, .22), transparent 38%), linear-gradient(145deg, #080709, #10090d 55%, #070709); font-family: Inter, ui-sans-serif, system-ui, sans-serif; z-index: 10000; }
+.download-card { position: relative; z-index: 1; width: min(100%, 520px); box-sizing: border-box; padding: 42px; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: linear-gradient(160deg, rgba(24,18,22,.98), rgba(11,10,13,.99)); box-shadow: 0 26px 100px rgba(0,0,0,.55), 0 0 55px rgba(255,38,63,.1); text-align: center; }
+.download-card .access-mark { margin: 0 auto 24px; }
+.download-card .access-kicker { letter-spacing: .14em; }
+.download-card h1 { margin: 14px 0 12px; font: 600 clamp(24px, 5vw, 32px) Orbitron, ui-sans-serif, sans-serif; letter-spacing: -.04em; }
+.download-copy { max-width: 400px; margin: 0 auto 25px; color: #aaa3aa; font-size: 14px; line-height: 1.7; }
+.download-primary, .download-preview { min-height: 49px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border-radius: 9px; cursor: pointer; text-decoration: none; font: 700 13px Orbitron, ui-sans-serif, sans-serif; letter-spacing: .04em; transition: filter .2s, background .2s, transform .2s; }
+.download-primary { width: 100%; border: 1px solid #ff4257; background: linear-gradient(100deg, #bb182e, #ef2d45); color: #fff; box-shadow: 0 8px 24px rgba(203,24,47,.24); }
+.download-primary:hover, .download-preview:hover { filter: brightness(1.12); transform: translateY(-1px); }
+.download-note { margin: 13px 0 0; color: #777179; font-size: 11px; line-height: 1.6; }
+.download-divider { display: flex; align-items: center; gap: 12px; margin: 27px 0 17px; color: #706971; font: 600 9px Orbitron, ui-sans-serif, sans-serif; letter-spacing: .12em; }
+.download-divider::before, .download-divider::after { content: ""; flex: 1; height: 1px; background: rgba(255,255,255,.1); }
+.download-preview { width: 100%; border: 1px solid rgba(255,63,83,.55); background: rgba(255,38,63,.06); color: #ff7180; }
 @keyframes access-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 520px) {
   .access-card { padding: 30px 24px 25px; }
   .access-card h1 { font-size: 22px; }
+  .download-card { padding: 32px 24px; }
 }
