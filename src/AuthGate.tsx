@@ -350,8 +350,10 @@ function DownloadPageMusic() {
 export default function AuthGate() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [showDownloadPage, setShowDownloadPage] = useState(() => window.location.pathname === "/download");
+  const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -373,11 +375,11 @@ export default function AuthGate() {
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/access/login", {
+      const response = await fetch(`/api/access/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, inviteCode }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not sign in.");
@@ -438,6 +440,7 @@ export default function AuthGate() {
     </>;
   }
 
+  const isSignup = mode === "signup";
   return (
     <main className="access-screen">
       <section className="access-card" aria-labelledby="access-title">
@@ -446,22 +449,33 @@ export default function AuthGate() {
           <div className="access-brand-name">SLENDO <span>CORD</span></div>
           <span className="access-private-tag"><i /> PRIVATE</span>
         </div>
-        <div className="access-kicker"><span className="access-kicker-line" /> PRIVATE ACCESS <span className="access-kicker-line" /></div>
-        <h1 id="access-title">Welcome back</h1>
-        <p className="access-subtitle">Sign in to continue to Slendo Cord.</p>
+        <div className="access-kicker"><span className="access-kicker-line" /> {isSignup ? "INVITE-ONLY ACCESS" : "PRIVATE ACCESS"} <span className="access-kicker-line" /></div>
+        <h1 id="access-title">{isSignup ? "Create your account" : "Welcome back"}</h1>
+        <p className="access-subtitle">{isSignup ? "Enter your one-time invite key to create an account." : "Sign in to continue to Slendo Cord."}</p>
 
         <form className="access-form" onSubmit={submit}>
           <label htmlFor="access-username">Username</label>
           <input id="access-username" autoComplete="username" maxLength={24} minLength={3} onChange={(event) => setUsername(event.target.value)} placeholder="your username" required value={username} />
 
           <label htmlFor="access-password">Password</label>
-          <input id="access-password" autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} placeholder="Your password" required type="password" value={password} />
+          <input id="access-password" autoComplete={isSignup ? "new-password" : "current-password"} minLength={isSignup ? 12 : undefined} onChange={(event) => setPassword(event.target.value)} placeholder={isSignup ? "At least 12 characters" : "Your password"} required type="password" value={password} />
+
+          {isSignup && <>
+            <label htmlFor="access-invite">One-time invite code</label>
+            <input id="access-invite" autoComplete="off" onChange={(event) => setInviteCode(event.target.value)} placeholder="Enter your invite key" required value={inviteCode} />
+          </>}
 
           {error && <div className="access-error" role="alert">{error}</div>}
-          <button className="access-submit" disabled={busy} type="submit">{busy ? "Please wait…" : "Sign in"}</button>
+          <button className="access-submit" disabled={busy} type="submit">{busy ? "Please wait…" : isSignup ? "Create account" : "Sign in"}</button>
         </form>
 
-        <div className="access-lock-note"><span>◈</span> Sign-in only · Use an existing account.</div>
+        <div className="access-switch">
+          {isSignup ? "Already have an account?" : "Have an invite key?"}{" "}
+          <button type="button" onClick={() => { setMode(isSignup ? "login" : "signup"); setError(""); }}>
+            {isSignup ? "Sign in" : "Create an account"}
+          </button>
+        </div>
+        <div className="access-lock-note"><span>◈</span> Invite keys work once. Sign in with your account after registration.</div>
         <BackgroundMusic />
       </section>
       <div className="access-footer">SLENDO CORD <span>—</span> PRIVATE TEST BUILD</div>
