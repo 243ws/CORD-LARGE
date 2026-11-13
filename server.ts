@@ -88,38 +88,8 @@ app.get("/api/access/session", (req, res) => {
   return res.json({ authenticated: true, username: session.username });
 });
 
-app.post("/api/access/signup", allowAccessAttempt, (req, res) => {
-  const username = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-  const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim() : "";
-  if (!/^[a-z0-9_-]{3,24}$/.test(username)) return res.status(400).json({ error: "Choose a username with 3–24 letters, numbers, dashes, or underscores." });
-  if (password.length < 12) return res.status(400).json({ error: "Use a password with at least 12 characters." });
-  if (!inviteCode) return res.status(400).json({ error: "An invite code is required. Ask the owner for one." });
-
-  const inviteHash = hashToken(inviteCode);
-  const invite = authDb.prepare("SELECT code_hash FROM access_invites WHERE code_hash = ? AND used_at IS NULL").get(inviteHash);
-  if (!invite) return res.status(403).json({ error: "That invite code is invalid or already used." });
-  if (authDb.prepare("SELECT 1 FROM access_users WHERE username = ?").get(username)) {
-    return res.status(409).json({ error: "That username is already taken." });
-  }
-
-  const salt = randomBytes(16).toString("hex");
-  const passwordHash = scryptSync(password, salt, 64).toString("hex");
-  const createAccount = authDb.transaction(() => {
-    authDb.prepare("INSERT INTO access_users (username, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?)")
-      .run(username, salt, passwordHash, Date.now());
-    const used = authDb.prepare("UPDATE access_invites SET used_at = ? WHERE code_hash = ? AND used_at IS NULL")
-      .run(Date.now(), inviteHash);
-    if (used.changes !== 1) throw new Error("Invite code was already used");
-  });
-  try {
-    createAccount();
-    issueAccessSession(username, res);
-    return res.status(201).json({ authenticated: true, username });
-  } catch (error) {
-    console.error("Account creation failed:", error);
-    return res.status(409).json({ error: "Could not create the account. Check the username and invite code." });
-  }
+app.post("/api/access/signup", (_req, res) => {
+  return res.status(403).json({ error: "Sign-up is disabled. Use an existing account." });
 });
 
 app.post("/api/access/login", allowAccessAttempt, (req, res) => {
