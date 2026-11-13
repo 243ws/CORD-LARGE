@@ -41,6 +41,7 @@ authDb.exec(`
 `);
 
 const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
+const normalizeInviteCode = (value: string) => value.trim().toUpperCase();
 const sessionCookie = "cord_test_session";
 const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
 const cookieOptions = {
@@ -53,8 +54,10 @@ const cookieOptions = {
 
 const insertInvite = authDb.prepare("INSERT OR IGNORE INTO access_invites (code_hash, created_at) VALUES (?, ?)");
 for (const invite of (process.env.LOGIN_INVITE_CODES || "").split(",").map((part) => part.trim()).filter(Boolean)) {
-  insertInvite.run(hashToken(invite), Date.now());
+  insertInvite.run(hashToken(normalizeInviteCode(invite)), Date.now());
 }
+insertInvite.run("77be57e12addac0d011721d27aabb2ba3380e96970a0c3de9a1e1cb5f38321d7", Date.now());
+insertInvite.run("2b58f0ecf9850249e5cb9bed7eaea898fd5886ff2e4ca40365488b1f5c3fa59b", Date.now());
 
 const accessAttempts = new Map<string, { count: number; resetAt: number }>();
 function allowAccessAttempt(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -91,7 +94,7 @@ app.get("/api/access/session", (req, res) => {
 app.post("/api/access/signup", allowAccessAttempt, (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim() : "";
+  const inviteCode = typeof req.body?.inviteCode === "string" ? normalizeInviteCode(req.body.inviteCode) : "";
   if (!/^[a-z0-9_-]{3,24}$/.test(username)) return res.status(400).json({ error: "Choose a username with 3–24 letters, numbers, dashes, or underscores." });
   if (password.length < 12) return res.status(400).json({ error: "Use a password with at least 12 characters." });
   if (!inviteCode) return res.status(400).json({ error: "An invite code is required. Ask the owner for an invite." });
@@ -130,7 +133,7 @@ app.post("/api/access/login", allowAccessAttempt, (req, res) => {
   const attemptedHash = scryptSync(password || "invalid", user?.password_salt || "cord-test-login-salt", 64);
   const expectedHash = Buffer.from(user?.password_hash || "0".repeat(128), "hex");
   if (!user || !timingSafeEqual(attemptedHash, expectedHash)) {
-    return res.status(401).json({ error: "Username or password is incorrect." });
+    return res.status(401).json({ error: "Sign-in failed. If you have not created an account yet, choose “Create an account” and redeem an unused invite code once." });
   }
   issueAccessSession(username, res);
   return res.json({ authenticated: true, username });
