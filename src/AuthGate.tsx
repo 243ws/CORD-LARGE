@@ -11,6 +11,18 @@ const soundtrack = [
   "4UmbbK64J8A",
   "zMxqb9NfZrA",
   "smQ2dbSm9ek",
+  "qsjDYBC4vgI",
+  "T5bd7d56Vgo",
+  "5hjogmc1RWo",
+  "mLbmSqaI944",
+  "3qAOab08jCU",
+  "c6i6sS6h5xE",
+  "O2kBP0Ph04g",
+  "eEYO0rKL6vk",
+  "1TFZl8oz6Es",
+  "aFOxVm3Z9x8",
+  "gnh_6Ak196U",
+  "6r3FWij1nHQ",
 ];
 
 type YoutubePlayer = {
@@ -242,11 +254,11 @@ function BackgroundMusic() {
       </div>
       <div className="access-soundtrack-topline">
         <span className="access-soundtrack-label">LOGIN SOUNDTRACK</span>
-        <span className="access-soundtrack-count">6 TRACK SHUFFLE</span>
+        <span className="access-soundtrack-count">{soundtrack.length} TRACK SHUFFLE</span>
       </div>
       <div className="access-track-status">
         <span className={`access-track-dot${soundOn ? " is-on" : ""}`} />
-        <span>{soundOn ? `NOW PLAYING · TRACK ${trackNumber} / 6` : "MUSIC READY · SHUFFLE ON"}</span>
+        <span>{soundOn ? `NOW PLAYING · TRACK ${trackNumber} / ${soundtrack.length}` : "MUSIC READY · SHUFFLE ON"}</span>
         <span className="access-equalizer" aria-hidden="true"><i /><i /><i /><i /><i /></span>
       </div>
       <div className="access-track-controls">
