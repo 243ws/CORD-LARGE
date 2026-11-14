@@ -41,6 +41,7 @@ import {
   VolumeX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import MassDmComposer from './MassDmComposer';
 import { SONGS } from './songs';
 import { 
   TabType, 
@@ -2130,6 +2131,7 @@ export function CordApp() {
           <div className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-4 px-3">Modules</div>
           {[
             { id: 'channels', label: 'Channels', icon: Hash },
+            { id: 'mass-dm', label: 'Message Drafts', icon: FileText },
             { id: 'normal', label: 'Normal Typing', icon: MessageSquare },
             { id: 'force-nickname', label: 'Force Nickname', icon: User },
             { id: 'auto-reply', label: 'Auto Reply', icon: User },
@@ -2404,6 +2406,23 @@ export function CordApp() {
                         </div>
                       </div>
                     </div>
+                  )}
+
+                  {activeTab === 'mass-dm' && (
+                    <MassDmComposer
+                      contacts={Array.from(new Map(
+                        dms.flatMap((dm: any) => (dm.recipients || [])
+                          .filter((recipient: any) => recipient.id !== userId)
+                          .map((recipient: any) => [recipient.id, {
+                            id: recipient.id,
+                            username: recipient.username || 'Unknown user',
+                            avatar: recipient.avatar
+                              ? `https://cdn.discordapp.com/avatars/${recipient.id}/${recipient.avatar}.png`
+                              : null
+                          }])
+                        )
+                      ).values())}
+                    />
                   )}
 
                   {activeTab === 'normal' && (
