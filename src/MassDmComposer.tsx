@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Search, Users, ImagePlus, FileText, Clock, CheckCircle2, X } from 'lucide-react';
 
 type Contact = { id: string; username: string; discriminator?: string; avatar?: string | null };
-type Draft = { id: string; recipient: Contact; message: string; imageName: string; createdAt: number };
+type Draft = { id: string; recipient: Contact; message: string; image: File | null; imageName: string; createdAt: number };
 
 type Props = { contacts: Contact[] };
 
@@ -12,7 +12,7 @@ export default function MassDmComposer({ contacts }: Props) {
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [preview, setPreview] = useState(false);
+  const [preview, setPreview] = useState(false);\n  const [countdown, setCountdown] = useState(0);
 
   const filtered = useMemo(() => contacts.filter(c =>
     c.username.toLowerCase().includes(query.toLowerCase()) || c.id.includes(query)
@@ -101,7 +101,7 @@ export default function MassDmComposer({ contacts }: Props) {
         <p className="text-xs text-white/60">{selected.length} separate drafts will be added to the local draft queue. No recipient will be contacted.</p>
         <p className="text-xs text-white/40">Message: {message.trim() || '(image only)'} {image ? ' · Image: ' + image.name : ''}</p>
         <div className="flex gap-2">
-          <button onClick={prepareDrafts} className="rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white">Create drafts</button>
+          <button onClick={prepareDrafts} disabled={countdown > 0} className="rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{countdown > 0 ? `Preparing in ${countdown}...` : 'Create drafts (3s delay)'}</button>
           <button onClick={() => setPreview(false)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/60">Back</button>
         </div>
       </div>}
