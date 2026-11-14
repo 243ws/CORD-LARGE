@@ -14,10 +14,11 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
+app.use("/api/discord", express.raw({ type: "multipart/form-data", limit: "25mb" }));
 app.use(cookieParser());
 
-// Invite-only access gate for this local testing copy. Invite codes are stored
+// Invite-only access gate for this testing copy. Invite codes are stored
 // as hashes and consumed once; passwords are salted and derived with scrypt.
 const authDb = new Database("cord-auth.sqlite");
 authDb.pragma("journal_mode = WAL");
@@ -41,20 +42,30 @@ authDb.exec(`
 `);
 
 const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
+const normalizeInviteCode = (value: string) => value.trim().toUpperCase();
 const sessionCookie = "cord_test_session";
 const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
-const cookieOptions = {
-  httpOnly: true,
-  sameSite: "strict" as const,
-  secure: process.env.NODE_ENV === "production",
-  path: "/",
-  maxAge: sessionDurationMs,
+
+const isHttpsRequest = (req: express.Request) =>
+  req.secure || req.headers["x-forwarded-proto"] === "https" || process.env.NODE_ENV === "production";
+
+const getCookieOptions = (req: express.Request, includeMaxAge = true) => {
+  const secure = isHttpsRequest(req);
+  return {
+    httpOnly: true,
+    sameSite: (secure ? "none" : "lax") as "none" | "lax",
+    secure,
+    path: "/",
+    ...(includeMaxAge ? { maxAge: sessionDurationMs } : {}),
+  };
 };
 
 const insertInvite = authDb.prepare("INSERT OR IGNORE INTO access_invites (code_hash, created_at) VALUES (?, ?)");
 for (const invite of (process.env.LOGIN_INVITE_CODES || "").split(",").map((part) => part.trim()).filter(Boolean)) {
-  insertInvite.run(hashToken(invite), Date.now());
+  insertInvite.run(hashToken(normalizeInviteCode(invite)), Date.now());
 }
+insertInvite.run("77be57e12addac0d011721d27aabb2ba3380e96970a0c3de9a1e1cb5f38321d7", Date.now());
+insertInvite.run("2b58f0ecf9850249e5cb9bed7eaea898fd5886ff2e4ca40365488b1f5c3fa59b", Date.now());
 
 const accessAttempts = new Map<string, { count: number; resetAt: number }>();
 function allowAccessAttempt(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -68,11 +79,11 @@ function allowAccessAttempt(req: express.Request, res: express.Response, next: e
   next();
 }
 
-function issueAccessSession(username: string, res: express.Response) {
+function issueAccessSession(username: string, req: express.Request, res: express.Response) {
   const token = randomBytes(32).toString("base64url");
   authDb.prepare("INSERT INTO access_sessions (token_hash, username, expires_at) VALUES (?, ?, ?)")
     .run(hashToken(token), username, Date.now() + sessionDurationMs);
-  res.cookie(sessionCookie, token, cookieOptions);
+  res.cookie(sessionCookie, token, getCookieOptions(req, true));
 }
 
 app.get("/api/access/session", (req, res) => {
@@ -82,7 +93,7 @@ app.get("/api/access/session", (req, res) => {
     .get(hashToken(token)) as { username: string; expires_at: number } | undefined;
   if (!session || session.expires_at <= Date.now()) {
     if (session) authDb.prepare("DELETE FROM access_sessions WHERE token_hash = ?").run(hashToken(token));
-    res.clearCookie(sessionCookie, { httpOnly: true, sameSite: "strict", secure: process.env.NODE_ENV === "production", path: "/" });
+    res.clearCookie(sessionCookie, getCookieOptions(req, false));
     return res.json({ authenticated: false });
   }
   return res.json({ authenticated: true, username: session.username });
@@ -91,7 +102,7 @@ app.get("/api/access/session", (req, res) => {
 app.post("/api/access/signup", allowAccessAttempt, (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim() : "";
+  const inviteCode = typeof req.body?.inviteCode === "string" ? normalizeInviteCode(req.body.inviteCode) : "";
   if (!/^[a-z0-9_-]{3,24}$/.test(username)) return res.status(400).json({ error: "Choose a username with 3–24 letters, numbers, dashes, or underscores." });
   if (password.length < 12) return res.status(400).json({ error: "Use a password with at least 12 characters." });
   if (!inviteCode) return res.status(400).json({ error: "An invite code is required. Ask the owner for an invite." });
@@ -112,9 +123,10 @@ app.post("/api/access/signup", allowAccessAttempt, (req, res) => {
       .run(Date.now(), inviteHash);
     if (used.changes !== 1) throw new Error("Invite code was already used");
   });
+
   try {
     createAccount();
-    issueAccessSession(username, res);
+    issueAccessSession(username, req, res);
     return res.status(201).json({ authenticated: true, username });
   } catch (error) {
     console.error("Account creation failed:", error);
@@ -130,16 +142,16 @@ app.post("/api/access/login", allowAccessAttempt, (req, res) => {
   const attemptedHash = scryptSync(password || "invalid", user?.password_salt || "cord-test-login-salt", 64);
   const expectedHash = Buffer.from(user?.password_hash || "0".repeat(128), "hex");
   if (!user || !timingSafeEqual(attemptedHash, expectedHash)) {
-    return res.status(401).json({ error: "Username or password is incorrect." });
+    return res.status(401).json({ error: "Sign-in failed. If you have not created an account yet, choose “Create an account” and redeem an unused invite code once." });
   }
-  issueAccessSession(username, res);
+  issueAccessSession(username, req, res);
   return res.json({ authenticated: true, username });
 });
 
 app.post("/api/access/logout", (req, res) => {
   const token = req.cookies[sessionCookie];
   if (token) authDb.prepare("DELETE FROM access_sessions WHERE token_hash = ?").run(hashToken(token));
-  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: "strict", secure: process.env.NODE_ENV === "production", path: "/" });
+  res.clearCookie(sessionCookie, getCookieOptions(req, false));
   return res.json({ authenticated: false });
 });
 
