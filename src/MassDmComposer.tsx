@@ -12,7 +12,8 @@ export default function MassDmComposer({ contacts }: Props) {
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [preview, setPreview] = useState(false);\n  const [countdown, setCountdown] = useState(0);
+  const [preview, setPreview] = useState(false);
+  const [countdown, setCountdown] = useState(0);
 
   const filtered = useMemo(() => contacts.filter(c =>
     c.username.toLowerCase().includes(query.toLowerCase()) || c.id.includes(query)
@@ -24,20 +25,23 @@ export default function MassDmComposer({ contacts }: Props) {
   const allVisibleSelected = filtered.length > 0 && filtered.every(c => selected.includes(c.id));
 
   const prepareDrafts = () => {
-    if (!message.trim() && !image) return;
-    const chosen = contacts.filter(c => selected.includes(c.id));
-    if (!chosen.length) return;
-    setDrafts(prev => [
-      ...prev,
-      ...chosen.map(recipient => ({
-        id: recipient.id + ':' + Date.now() + ':' + Math.random().toString(36).slice(2),
-        recipient,
-        message: message.trim(),
-        imageName: image?.name || '',
-        createdAt: Date.now()
-      }))
-    ]);
-    setPreview(false);
+    if ((!message.trim() && !image) || !selected.length || countdown > 0) return;
+    setCountdown(3);
+    let remaining = 3;
+    const timer = window.setInterval(() => {
+      remaining -= 1;
+      setCountdown(remaining);
+      if (remaining <= 0) {
+        window.clearInterval(timer);
+        const chosen = contacts.filter(c => selected.includes(c.id));
+        const now = Date.now();
+        setDrafts(prev => [...prev, ...chosen.map(recipient => ({
+          id: recipient.id + ':' + now + ':' + Math.random().toString(36).slice(2),
+          recipient, message: message.trim(), image, imageName: image?.name || '', createdAt: now
+        }))]);
+        setPreview(false);
+      }
+    }, 1000);
   };
 
   return (
