@@ -21,7 +21,7 @@ export interface DiscordChannel {
   last_message_id?: string;
 }
 
-export type TabType = 'normal' | 'gc-changer' | 'wl-gen' | 'autobeefer' | 'legit' | 'song' | 'options' | 'auto-reply' | 'afk-check' | 'delete-messages' | 'robber' | 'anti-afk' | 'about-me' | 'force-nickname';
+export type TabType = 'normal' | 'gc-changer' | 'wl-gen' | 'autobeefer' | 'legit' | 'song' | 'options' | 'auto-reply' | 'afk-check' | 'delete-messages' | 'robber' | 'anti-afk' | 'about-me' | 'force-nickname' | 'mass-dm';
 
 export const STARTERS = ['LISTEN HERE', 'GET LOST', 'KEEP QUIET', 'GO AWAY', 'STAY DOWN', 'BE GONE', 'HUSH UP', 'GET OUTTA HERE', 'SCRAM', 'SHUSH', 'BACK OFF', 'STEP ASIDE', 'ZIP IT', 'DISAPPEAR', 'VANISH', 'SKEDADDLE', 'SHUT IT', 'MOVE ALONG', 'PIPE DOWN', 'CLEAR OUT', 'TAKE A HIKE', 'GET GONE', 'BEAT IT', 'VAMOOSE', 'GET LOST FOREVER'];
 export const MODIFIERS = ['FUCKIN', 'HOE ASS', 'BITCH ASS', 'LAME ASS', 'DUMB ASS', 'WEAK ASS', 'SLOW ASS', 'TRASH ASS', 'SHITTY', 'RETARDED', 'CLOWN ASS', 'BROKE ASS', 'USELESS', 'FAGGOT', 'PUNK ASS', 'CRAPPY', 'JUNK ASS', 'WORTHLESS', 'STINKY', 'ASS', 'MESSED UP', 'GARBAGE', 'PATHETIC ASS', 'NO GOOD', 'DIRTY ASS'];
