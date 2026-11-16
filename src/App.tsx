@@ -38,16 +38,23 @@ import {
   Users,
   Trash,
   Volume2,
-  VolumeX
+  VolumeX,
+  Copy,
+  Download,
+  ExternalLink,
+  Check,
+  Image as ImageIcon,
+  CheckSquare,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import MassDmComposer from './MassDmComposer';
 import { SONGS } from './songs';
 import { 
   TabType, 
   DiscordUser, 
   DiscordGuild,
   DiscordChannel,
+  DiscordRelationship,
   STARTERS, 
   MODIFIERS, 
   DESCRIPTORS, 
@@ -112,43 +119,6 @@ const discordFetch = async (url: string, init: RequestInit = {}): Promise<Respon
     }
     throw new Error('Network error during Discord API request');
   }
-};
-
-const isDiscordAssetHash = (hash?: string | null): hash is string =>
-  !!hash && /^(?:a_)?[0-9a-f]+$/i.test(hash);
-
-const discordAssetExt = (hash: string) => (hash.startsWith('a_') ? 'gif' : 'png');
-
-const discordDefaultAvatar = (userId: string, discriminator?: string | null) => {
-  try {
-    if (discriminator && discriminator !== '0') {
-      return `https://cdn.discordapp.com/embed/avatars/${Number(discriminator) % 5}.png`;
-    }
-    const index = Number((BigInt(userId) >> 22n) % 6n);
-    return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
-  } catch {
-    return 'https://cdn.discordapp.com/embed/avatars/0.png';
-  }
-};
-
-const discordUserAvatarUrl = (userId: string, hash?: string | null, discriminator?: string | null) => {
-  if (!isDiscordAssetHash(hash)) return discordDefaultAvatar(userId, discriminator);
-  return `https://cdn.discordapp.com/avatars/${userId}/${hash}.${discordAssetExt(hash)}?size=1024`;
-};
-
-const discordUserBannerUrl = (userId: string, hash?: string | null) => {
-  if (!isDiscordAssetHash(hash)) return null;
-  return `https://cdn.discordapp.com/banners/${userId}/${hash}.${discordAssetExt(hash)}?size=1024`;
-};
-
-const discordGuildUserAssetUrl = (
-  guildId: string,
-  userId: string,
-  kind: 'avatars' | 'banners',
-  hash?: string | null
-) => {
-  if (!isDiscordAssetHash(hash)) return null;
-  return `https://cdn.discordapp.com/guilds/${guildId}/users/${userId}/${kind}/${hash}.${discordAssetExt(hash)}?size=1024`;
 };
 
 export function CordApp() {
@@ -296,6 +266,25 @@ export function CordApp() {
   const [robberStatus, setRobberStatus] = useState('');
   const [robberResult, setRobberResult] = useState<any>(null);
   const [isRobbing, setIsRobbing] = useState(false);
+  const [copiedText, setCopiedText] = useState<string | null>(null);
+  const [robberFoundCandidates, setRobberFoundCandidates] = useState<any[]>([]);
+  const [robberAssetTab, setRobberAssetTab] = useState<'global' | 'server'>('global');
+
+  // Mass DM State
+  const [friends, setFriends] = useState<DiscordRelationship[]>([]);
+  const [isRefreshingFriends, setIsRefreshingFriends] = useState(false);
+  const [massDmSearch, setMassDmSearch] = useState('');
+  const [selectedFriendIds, setSelectedFriendIds] = useState<Set<string>>(new Set());
+  const [massDmMessage, setMassDmMessage] = useState('');
+  const [massDmImageFile, setMassDmImageFile] = useState<File | null>(null);
+  const [massDmImagePreview, setMassDmImagePreview] = useState<string | null>(null);
+  const [massDmDelay, setMassDmDelay] = useState(3.0);
+  const [massDmTypingIndicator, setMassDmTypingIndicator] = useState(true);
+  const [massDmActive, setMassDmActive] = useState(false);
+  const [massDmStatus, setMassDmStatus] = useState('');
+  const [massDmProgress, setMassDmProgress] = useState({ current: 0, total: 0, sent: 0, failed: 0 });
+  const [massDmLogs, setMassDmLogs] = useState<Array<{ msg: string; type: 'info' | 'success' | 'warn' | 'error'; time: string }>>([]);
+  const massDmStoppedRef = useRef(false);
 
   // Deletion State
   const [isDeleting, setIsDeleting] = useState(false);
@@ -456,20 +445,49 @@ export function CordApp() {
         setSearchResults([{ id: videoId, name: `YouTube video · ${videoId}`, thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg` }]);
         return;
       }
-      const res = await fetch('/api/search/youtube', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQuery.trim() })
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'YouTube search is unavailable');
-      const data = await res.json();
+
+      const queryLower = searchQuery.toLowerCase().trim();
+      const localMatches = SONGS.filter((song) => {
+        return song.name.toLowerCase().includes(queryLower) || song.id.toLowerCase().includes(queryLower);
+      }).map((song) => ({
+        id: song.id,
+        name: song.name,
+        channel: 'Slendo Queue',
+        thumbnail: `https://img.youtube.com/vi/${song.id}/mqdefault.jpg`
+      }));
+
+      let remoteMatches: any[] = [];
+      try {
+        const res = await fetch('/api/search/youtube', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: searchQuery.trim() })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            remoteMatches = data.map((item: any) => {
+              const id = item.id?.videoId || item.id;
+              return {
+                id,
+                name: item.snippet?.title || 'YouTube video',
+                channel: item.snippet?.channelTitle,
+                thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://img.youtube.com/vi/${id}/mqdefault.jpg`
+              };
+            }).filter((item: any) => item.id);
+          }
+        }
+      } catch {}
+
       const seenIds = new Set<string>();
-      const matches = (Array.isArray(data) ? data : []).map((item: any) => {
-        const id = item.id?.videoId || item.id;
-        return { id, name: item.snippet?.title || 'YouTube video', channel: item.snippet?.channelTitle, thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://img.youtube.com/vi/${id}/mqdefault.jpg` };
-      }).filter((item: any) => item.id && !seenIds.has(item.id) && seenIds.add(item.id));
-      setSearchResults(matches);
-      if (!matches.length) setSearchError('No videos found. Try another search.');
+      const combined = [...localMatches, ...remoteMatches].filter((s) => {
+        if (!s.id || seenIds.has(s.id)) return false;
+        seenIds.add(s.id);
+        return true;
+      });
+
+      setSearchResults(combined);
+      if (!combined.length) setSearchError('No videos found. Try another search.');
     } catch (e) {
       console.error("Search error:", e);
       setSearchResults([]);
@@ -542,11 +560,7 @@ export function CordApp() {
   const toggleRepeat = () => {
     loopModeRef.current = !loopModeRef.current;
     setLoopMode(loopModeRef.current);
-  };
-  const handleRewind = () => {
-    if (ytPlayerRef.current && ytPlayerReadyRef.current) {
-      ytPlayerRef.current.seekTo(Math.max(0, ytPlayerRef.current.getCurrentTime() - 10), true);
-    }
+    setRepeatMode(loopModeRef.current);
   };
 
   const handlePrevious = () => {
@@ -558,7 +572,6 @@ export function CordApp() {
   };
 
   const handleSkip = () => {
-    // A manual or automatic skip enables shuffle and picks another track.
     setShuffleMode(true);
     let nextIndex = currentSongIndex + 1;
     if (songQueue.length > 1) {
@@ -738,6 +751,33 @@ export function CordApp() {
     }
   };
 
+  const refreshFriends = async () => {
+    if (!token) return;
+    setIsRefreshingFriends(true);
+    try {
+      const res = await fetch('https://discord.com/api/v9/users/@me/relationships', {
+        headers: { 'Authorization': token }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const friendList = data
+            .filter((rel: any) => rel.type === 1 && rel.user)
+            .sort((a: any, b: any) => {
+              const nameA = (a.nickname || a.user?.global_name || a.user?.username || '').toLowerCase();
+              const nameB = (b.nickname || b.user?.global_name || b.user?.username || '').toLowerCase();
+              return nameA.localeCompare(nameB);
+            });
+          setFriends(friendList);
+        }
+      }
+    } catch (e) {
+      console.error("Error refreshing friends:", e);
+    } finally {
+      setIsRefreshingFriends(false);
+    }
+  };
+
   // Fetch User on Token Change
   useEffect(() => {
     let cancelled = false;
@@ -746,6 +786,8 @@ export function CordApp() {
       setUserId('');
       setGuilds([]);
       setDms([]);
+      setFriends([]);
+      setSelectedFriendIds(new Set());
       setTokenStatus('idle');
       return () => {
         cancelled = true;
@@ -803,6 +845,25 @@ export function CordApp() {
         if (dmsRes.ok) {
           const dmsData = await dmsRes.json();
           setDms(dmsData.filter((c: any) => c.type === 1 || c.type === 3));
+        }
+
+        const relRes = await fetch('https://discord.com/api/v9/users/@me/relationships', {
+          headers: { 'Authorization': token }
+        });
+        if (cancelled) return;
+        if (await isAppSessionFailure(relRes)) return;
+        if (relRes.ok) {
+          const relData = await relRes.json();
+          if (Array.isArray(relData)) {
+            const friendList = relData
+              .filter((rel: any) => rel.type === 1 && rel.user)
+              .sort((a: any, b: any) => {
+                const nameA = (a.nickname || a.user?.global_name || a.user?.username || '').toLowerCase();
+                const nameB = (b.nickname || b.user?.global_name || b.user?.username || '').toLowerCase();
+                return nameA.localeCompare(nameB);
+              });
+            setFriends(friendList);
+          }
         }
       } catch (e) {
         if (!cancelled) {
@@ -908,6 +969,243 @@ export function CordApp() {
       });
     } catch (e) {
       console.error("Typing indicator error:", e);
+    }
+  };
+
+  // Mass DM Helpers & Broadcaster
+  const addMassDmLog = (msg: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
+    setMassDmLogs(prev => [{ msg, type, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 150));
+  };
+
+  const handleMassDmImageChange = (file: File | null) => {
+    if (massDmImagePreview) {
+      URL.revokeObjectURL(massDmImagePreview);
+    }
+    if (!file) {
+      setMassDmImageFile(null);
+      setMassDmImagePreview(null);
+      return;
+    }
+    setMassDmImageFile(file);
+    setMassDmImagePreview(URL.createObjectURL(file));
+  };
+
+  const toggleFriendSelection = (friendId: string) => {
+    if (massDmActive) return;
+    setSelectedFriendIds(prev => {
+      const next = new Set(prev);
+      if (next.has(friendId)) next.delete(friendId);
+      else next.add(friendId);
+      return next;
+    });
+  };
+
+  const selectAllFriends = () => {
+    if (massDmActive) return;
+    setSelectedFriendIds(new Set(friends.map(f => f.user.id)));
+  };
+
+  const unselectAllFriends = () => {
+    if (massDmActive) return;
+    setSelectedFriendIds(new Set());
+  };
+
+  const selectFilteredFriends = (filteredIds: string[]) => {
+    if (massDmActive) return;
+    setSelectedFriendIds(prev => {
+      const next = new Set(prev);
+      filteredIds.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const unselectFilteredFriends = (filteredIds: string[]) => {
+    if (massDmActive) return;
+    setSelectedFriendIds(prev => {
+      const next = new Set(prev);
+      filteredIds.forEach(id => next.delete(id));
+      return next;
+    });
+  };
+
+  const handleStopMassDm = () => {
+    massDmStoppedRef.current = true;
+    setMassDmStatus('Stopping after current step...');
+    addMassDmLog('Mass DM stopped by user.', 'warn');
+  };
+
+  const handleStartMassDm = async () => {
+    if (!token) {
+      setMassDmStatus('Enter your Discord token first.');
+      return;
+    }
+    const targetFriends = friends.filter(f => selectedFriendIds.has(f.user.id));
+    if (targetFriends.length === 0) {
+      setMassDmStatus('Select at least 1 friend from your friends list.');
+      return;
+    }
+    if (!massDmMessage.trim() && !massDmImageFile) {
+      setMassDmStatus('Enter a message or attach an image to send.');
+      return;
+    }
+
+    massDmStoppedRef.current = false;
+    setMassDmActive(true);
+    setMassDmLogs([]);
+    setMassDmProgress({ current: 0, total: targetFriends.length, sent: 0, failed: 0 });
+    const effectiveDelayMs = Math.max(3000, Math.round(massDmDelay * 1000));
+
+    addMassDmLog(
+      `Starting Mass DM to ${targetFriends.length} friend${targetFriends.length === 1 ? '' : 's'} (${(effectiveDelayMs / 1000).toFixed(1)}s delay${massDmTypingIndicator ? ' + typing indicator' : ''}).`,
+      'info'
+    );
+
+    const cancellableWait = async (ms: number, onTick?: (remainingMs: number) => void) => {
+      const step = 100;
+      let elapsed = 0;
+      while (elapsed < ms) {
+        if (massDmStoppedRef.current) return false;
+        if (onTick) onTick(Math.max(0, ms - elapsed));
+        const chunk = Math.min(step, ms - elapsed);
+        await new Promise(resolve => setTimeout(resolve, chunk));
+        elapsed += chunk;
+      }
+      return !massDmStoppedRef.current;
+    };
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < targetFriends.length; i++) {
+      if (massDmStoppedRef.current) break;
+      const friendRel = targetFriends[i];
+      const friend = friendRel.user;
+      const displayName = friendRel.nickname || friend.global_name || friend.display_name || friend.username;
+
+      setMassDmProgress({ current: i + 1, total: targetFriends.length, sent: sentCount, failed: failedCount });
+      setMassDmStatus(`Opening DM with ${displayName} (@${friend.username})...`);
+
+      try {
+        // 1. Resolve or open DM channel
+        let dmChannelId = dms.find(
+          (c: any) => c.type === 1 && Array.isArray(c.recipients) && c.recipients.some((r: any) => r.id === friend.id)
+        )?.id;
+
+        if (!dmChannelId) {
+          let openRes = await fetch('https://discord.com/api/v9/users/@me/channels', {
+            method: 'POST',
+            headers: {
+              'Authorization': token,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ recipient_id: friend.id })
+          });
+
+          if (openRes.status === 429) {
+            const rl = await openRes.json().catch(() => ({}));
+            const waitMs = Math.ceil(((rl.retry_after || 3) + 0.5) * 1000);
+            addMassDmLog(`Rate limited opening DM for @${friend.username}. Waiting ${(waitMs / 1000).toFixed(1)}s...`, 'warn');
+            const ok = await cancellableWait(waitMs);
+            if (!ok) break;
+            openRes = await fetch('https://discord.com/api/v9/users/@me/channels', {
+              method: 'POST',
+              headers: {
+                'Authorization': token,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ recipient_id: friend.id })
+            });
+          }
+
+          if (!openRes.ok) {
+            const errData = await openRes.json().catch(() => ({}));
+            throw new Error(errData.message || `Cannot open DM (HTTP ${openRes.status})`);
+          }
+          const dmData = await openRes.json();
+          dmChannelId = dmData.id;
+        }
+
+        if (massDmStoppedRef.current) break;
+
+        // 2. Typing indicator + 3s delay before sending DM
+        if (massDmTypingIndicator) {
+          await fetch(`https://discord.com/api/v9/channels/${dmChannelId}/typing`, {
+            method: 'POST',
+            headers: { 'Authorization': token }
+          }).catch(() => {});
+        }
+
+        const waitedOk = await cancellableWait(effectiveDelayMs, (remainingMs) => {
+          setMassDmStatus(
+            `${massDmTypingIndicator ? 'Typing' : 'Waiting'} in DM to ${displayName} (@${friend.username})... ${(remainingMs / 1000).toFixed(1)}s`
+          );
+        });
+        if (!waitedOk) break;
+
+        // 3. Send message and/or image attachment
+        setMassDmStatus(`Sending DM to ${displayName} (@${friend.username})...`);
+
+        const sendAttempt = async () => {
+          if (massDmImageFile) {
+            const formData = new FormData();
+            formData.append(
+              'payload_json',
+              JSON.stringify({ content: massDmMessage.trim() || '' })
+            );
+            formData.append('files[0]', massDmImageFile, massDmImageFile.name);
+            return fetch(`https://discord.com/api/v9/channels/${dmChannelId}/messages`, {
+              method: 'POST',
+              headers: { 'Authorization': token },
+              body: formData
+            });
+          }
+          return fetch(`https://discord.com/api/v9/channels/${dmChannelId}/messages`, {
+            method: 'POST',
+            headers: {
+              'Authorization': token,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ content: massDmMessage.trim() })
+          });
+        };
+
+        let sendRes = await sendAttempt();
+        if (sendRes.status === 429) {
+          const rl = await sendRes.json().catch(() => ({}));
+          const waitMs = Math.ceil(((rl.retry_after || 5) + 0.5) * 1000);
+          addMassDmLog(`Rate limited sending to @${friend.username}. Waiting ${(waitMs / 1000).toFixed(1)}s...`, 'warn');
+          const ok = await cancellableWait(waitMs);
+          if (!ok) break;
+          if (massDmTypingIndicator) {
+            await fetch(`https://discord.com/api/v9/channels/${dmChannelId}/typing`, {
+              method: 'POST',
+              headers: { 'Authorization': token }
+            }).catch(() => {});
+          }
+          sendRes = await sendAttempt();
+        }
+
+        if (!sendRes.ok) {
+          const errData = await sendRes.json().catch(() => ({}));
+          throw new Error(errData.message || `Failed to send (HTTP ${sendRes.status})`);
+        }
+
+        sentCount++;
+        setMassDmProgress({ current: i + 1, total: targetFriends.length, sent: sentCount, failed: failedCount });
+        addMassDmLog(`Sent DM to ${displayName} (@${friend.username})`, 'success');
+      } catch (err: any) {
+        failedCount++;
+        setMassDmProgress({ current: i + 1, total: targetFriends.length, sent: sentCount, failed: failedCount });
+        addMassDmLog(`Failed for @${friend.username}: ${err.message || 'Unknown error'}`, 'error');
+      }
+    }
+
+    setMassDmActive(false);
+    if (massDmStoppedRef.current) {
+      setMassDmStatus(`Stopped. Sent ${sentCount}/${targetFriends.length} DMs (${failedCount} failed).`);
+    } else {
+      setMassDmStatus(`Completed! Sent ${sentCount}/${targetFriends.length} DMs (${failedCount} failed).`);
+      addMassDmLog(`Finished Mass DM: ${sentCount} sent, ${failedCount} failed.`, 'info');
     }
   };
 
@@ -1282,84 +1580,296 @@ export function CordApp() {
     };
   }, [forceOtherActive, token, forceOtherGuildId, forceOtherUserId, forceOtherNickName]);
 
-  const handleRobber = async () => {
+  const extractSnowflake = (input: string): string | null => {
+    if (!input) return null;
+    const clean = input.trim();
+    if (/^\d{17,21}$/.test(clean)) return clean;
+    const mentionMatch = clean.match(/<@!?(\d{17,21})>/);
+    if (mentionMatch) return mentionMatch[1];
+    const urlMatch = clean.match(/(?:discord\.com|discordapp\.com)\/users\/(\d{17,21})/);
+    if (urlMatch) return urlMatch[1];
+    return null;
+  };
+
+  const getHighestQualityCdnUrl = (basePath: string, hash: string | null | undefined, size = 4096) => {
+    if (!hash) return null;
+    const ext = hash.startsWith('a_') ? 'gif' : 'png';
+    return `https://cdn.discordapp.com/${basePath}/${hash}.${ext}?size=${size}`;
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedText(label);
+      setTimeout(() => setCopiedText(null), 2000);
+    } catch (e) {
+      console.warn("Clipboard copy failed:", e);
+    }
+  };
+
+  const handleRobber = async (customTarget?: string, customGuild?: string) => {
     if (!token) {
-      setRobberStatus('Token required');
+      setRobberStatus('Token required — enter your Discord token in the Normal tab first');
       return;
     }
+    const rawTarget = (customTarget !== undefined ? customTarget : robberTargetId).trim();
+    const rawGuild = (customGuild !== undefined ? customGuild : robberGuildId).trim();
+
+    let targetId = extractSnowflake(rawTarget);
+    let guildId = extractSnowflake(rawGuild);
+
     setIsRobbing(true);
-    setRobberStatus('Fetching...');
+    setRobberStatus('Resolving user credentials & ID...');
     setRobberResult(null);
+    setRobberFoundCandidates([]);
 
     try {
-      const targetUserId = robberTargetId.trim();
-      const targetGuildId = robberGuildId.trim();
+      // If user typed a username, tag, or display name instead of a pure numeric snowflake:
+      if (!targetId && rawTarget) {
+        const query = rawTarget.toLowerCase().replace(/^@/, '');
+        setRobberStatus(`Searching for user ID matching "${rawTarget}"...`);
 
-      if (targetUserId) {
-        const profileParams = new URLSearchParams({
-          with_mutual_guilds: 'false',
-          with_mutual_friends: 'false',
-        });
-        if (targetGuildId) profileParams.set('guild_id', targetGuildId);
+        const matchedUsers: any[] = [];
+        const seenIds = new Set<string>();
 
-        const headers = { Authorization: token };
-        const profileRes = await fetch(
-          `https://discord.com/api/v9/users/${targetUserId}/profile?${profileParams}`,
-          { headers }
-        );
-
-        let profile: any = null;
-        let user: any = null;
-        if (profileRes.ok) {
-          profile = await profileRes.json();
-          user = profile.user ?? profile;
-        } else {
-          const userRes = await fetch(`https://discord.com/api/v9/users/${targetUserId}`, { headers });
-          if (!userRes.ok) throw new Error('Failed to fetch user');
-          user = await userRes.json();
+        // 1. Search recent DMs list
+        for (const dm of dms) {
+          if (Array.isArray(dm.recipients)) {
+            for (const r of dm.recipients) {
+              if (!seenIds.has(r.id)) {
+                if (
+                  r.username?.toLowerCase() === query ||
+                  r.global_name?.toLowerCase() === query ||
+                  r.id === query ||
+                  r.username?.toLowerCase().includes(query) ||
+                  r.global_name?.toLowerCase().includes(query)
+                ) {
+                  seenIds.add(r.id);
+                  matchedUsers.push(r);
+                }
+              }
+            }
+          }
         }
 
-        const resolvedId = String(user?.id || targetUserId);
-        const member = profile?.guild_member;
-        const profileAvatar = user?.avatar
-          ? discordUserAvatarUrl(resolvedId, user.avatar, user.discriminator)
+        // 2. Search relationships / friends
+        try {
+          const relRes = await fetch('https://discord.com/api/v9/users/@me/relationships', {
+            headers: { Authorization: token }
+          });
+          if (relRes.ok) {
+            const relData = await relRes.json();
+            if (Array.isArray(relData)) {
+              for (const rel of relData) {
+                const u = rel.user;
+                if (u && !seenIds.has(u.id)) {
+                  if (
+                    u.username?.toLowerCase() === query ||
+                    u.global_name?.toLowerCase() === query ||
+                    u.id === query ||
+                    u.username?.toLowerCase().includes(query) ||
+                    u.global_name?.toLowerCase().includes(query)
+                  ) {
+                    seenIds.add(u.id);
+                    matchedUsers.push(u);
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+
+        // 3. Search members in selected Guild or first few guilds
+        const searchGuilds = guildId ? [{ id: guildId }] : guilds.slice(0, 6);
+        for (const g of searchGuilds) {
+          try {
+            const mRes = await fetch(
+              `https://discord.com/api/v9/guilds/${g.id}/members/search?query=${encodeURIComponent(query)}&limit=5`,
+              { headers: { Authorization: token } }
+            );
+            if (mRes.ok) {
+              const members = await mRes.json();
+              if (Array.isArray(members)) {
+                for (const m of members) {
+                  if (m.user && !seenIds.has(m.user.id)) {
+                    seenIds.add(m.user.id);
+                    matchedUsers.push({ ...m.user, nick: m.nick, guildId: g.id });
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+
+        if (matchedUsers.length === 1) {
+          targetId = matchedUsers[0].id;
+          setRobberTargetId(targetId);
+          if (matchedUsers[0].guildId && !guildId) {
+            guildId = matchedUsers[0].guildId;
+            setRobberGuildId(guildId);
+          }
+        } else if (matchedUsers.length > 1) {
+          // Exact username match takes priority
+          const exact = matchedUsers.find(
+            (u) => u.username?.toLowerCase() === query || u.global_name?.toLowerCase() === query
+          );
+          if (exact) {
+            targetId = exact.id;
+            setRobberTargetId(targetId);
+            if (exact.guildId && !guildId) {
+              guildId = exact.guildId;
+              setRobberGuildId(guildId);
+            }
+          } else {
+            setRobberFoundCandidates(matchedUsers);
+            targetId = matchedUsers[0].id;
+            setRobberTargetId(targetId);
+          }
+        } else {
+          throw new Error(`Could not find any user matching "${rawTarget}". Try entering their 18-digit numeric User ID, or choose directly from your DMs.`);
+        }
+      }
+
+      if (!targetId && !guildId) {
+        throw new Error('Enter a User ID, Username, or Guild ID');
+      }
+
+      setRobberStatus('Fetching 4K profile picture & banner assets...');
+
+      if (targetId) {
+        let profileData: any = null;
+        let memberData: any = null;
+
+        // Call profile endpoint to get banners, badges, theme colors, and server profile
+        try {
+          const profileUrl = `https://discord.com/api/v9/users/${targetId}/profile${guildId ? `?guild_id=${guildId}` : ''}`;
+          const pRes = await fetch(profileUrl, {
+            headers: { Authorization: token }
+          });
+          if (pRes.ok) {
+            profileData = await pRes.json();
+          }
+        } catch (e) {}
+
+        // Fallback or augment with base user endpoint
+        let userObj = profileData?.user;
+        if (!userObj) {
+          const uRes = await fetch(`https://discord.com/api/v9/users/${targetId}`, {
+            headers: { Authorization: token }
+          });
+          if (!uRes.ok) throw new Error('User not found on Discord. Double check the User ID.');
+          userObj = await uRes.json();
+        }
+
+        // Guild member specific asset lookup
+        if (guildId) {
+          if (profileData?.guild_member) {
+            memberData = profileData.guild_member;
+          } else {
+            try {
+              const mRes = await fetch(`https://discord.com/api/v9/guilds/${guildId}/members/${targetId}`, {
+                headers: { Authorization: token }
+              });
+              if (mRes.ok) {
+                memberData = await mRes.json();
+              }
+            } catch {}
+          }
+        }
+
+        const avatarHash = userObj.avatar;
+        const bannerHash = userObj.banner || profileData?.user_profile?.banner;
+        const memberAvatarHash = memberData?.avatar;
+        const memberBannerHash = memberData?.banner;
+        const accentColor = userObj.accent_color ?? profileData?.user_profile?.accent_color;
+        const bannerColor = userObj.banner_color ?? profileData?.user_profile?.banner_color;
+        const bio = profileData?.user_profile?.bio || userObj.bio || '';
+        const globalName = userObj.global_name || userObj.display_name || userObj.username;
+
+        let createdAt = '';
+        try {
+          const ts = Number((BigInt(targetId) >> 22n) + 1420070400000n);
+          createdAt = new Date(ts).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          });
+        } catch {}
+
+        const globalAvatar = avatarHash
+          ? getHighestQualityCdnUrl(`avatars/${targetId}`, avatarHash, 4096)
+          : `https://cdn.discordapp.com/embed/avatars/${(BigInt(targetId) >> 22n) % 6n}.png?size=4096`;
+
+        const globalBanner = bannerHash
+          ? getHighestQualityCdnUrl(`banners/${targetId}`, bannerHash, 4096)
           : null;
-        const profileBanner = discordUserBannerUrl(
-          resolvedId,
-          user?.banner || profile?.user_profile?.banner
-        );
-        const serverAvatar = targetGuildId
-          ? discordGuildUserAssetUrl(targetGuildId, resolvedId, 'avatars', member?.avatar)
+
+        const serverAvatar = memberAvatarHash && guildId
+          ? getHighestQualityCdnUrl(`guilds/${guildId}/users/${targetId}/avatars`, memberAvatarHash, 4096)
           : null;
-        const serverBanner = targetGuildId
-          ? discordGuildUserAssetUrl(targetGuildId, resolvedId, 'banners', member?.banner)
+
+        const serverBanner = memberBannerHash && guildId
+          ? getHighestQualityCdnUrl(`guilds/${guildId}/users/${targetId}/banners`, memberBannerHash, 4096)
+          : null;
+
+        const hexColor = accentColor !== undefined && accentColor !== null
+          ? `#${accentColor.toString(16).padStart(6, '0')}`
+          : (bannerColor || null);
+
+        setRobberResult({
+          type: 'user',
+          id: targetId,
+          username: userObj.username,
+          discriminator: userObj.discriminator,
+          globalName,
+          nickname: memberData?.nick || null,
+          bio,
+          createdAt,
+          accentColor: hexColor,
+          badges: profileData?.badges || [],
+          avatar: serverAvatar || globalAvatar,
+          globalAvatar,
+          serverAvatar,
+          banner: serverBanner || globalBanner,
+          globalBanner,
+          serverBanner,
+          isAnimatedAvatar: !!avatarHash?.startsWith('a_') || !!memberAvatarHash?.startsWith('a_'),
+          isAnimatedBanner: !!bannerHash?.startsWith('a_') || !!memberBannerHash?.startsWith('a_')
+        });
+        setRobberStatus('Assets successfully stolen in 4K resolution!');
+      } else if (guildId) {
+        const res = await fetch(`https://discord.com/api/v9/guilds/${guildId}`, {
+          headers: { Authorization: token }
+        });
+        if (!res.ok) throw new Error('Guild not found or invalid Guild ID');
+        const data = await res.json();
+        
+        const icon = data.icon 
+          ? getHighestQualityCdnUrl(`icons/${guildId}`, data.icon, 4096) 
+          : null;
+        const banner = data.banner 
+          ? getHighestQualityCdnUrl(`banners/${guildId}`, data.banner, 4096) 
+          : null;
+        const splash = data.splash
+          ? `https://cdn.discordapp.com/splashes/${guildId}/${data.splash}.png?size=4096`
+          : null;
+        const discovery = data.discovery_splash
+          ? `https://cdn.discordapp.com/discovery-splashes/${guildId}/${data.discovery_splash}.png?size=4096`
           : null;
 
         setRobberResult({
-          type: targetGuildId && member ? 'member' : 'user',
-          username: user?.global_name || user?.username || resolvedId,
-          avatar: profileAvatar || serverAvatar || discordDefaultAvatar(resolvedId, user?.discriminator),
-          banner: profileBanner || serverBanner,
-          userAvatar: profileAvatar || discordDefaultAvatar(resolvedId, user?.discriminator),
-          userBanner: profileBanner,
-        });
-      } else if (targetGuildId) {
-        const res = await fetch(`https://discord.com/api/v9/guilds/${robberGuildId}`, {
-          headers: { Authorization: token }
-        });
-        if (!res.ok) throw new Error('Failed to fetch guild');
-        const data = await res.json();
-        setRobberResult({
           type: 'guild',
+          id: guildId,
           name: data.name,
-          icon: data.icon ? `https://cdn.discordapp.com/icons/${robberGuildId}/${data.icon}.png?size=1024` : null,
-          banner: data.banner ? `https://cdn.discordapp.com/banners/${robberGuildId}/${data.banner}.png?size=1024` : null,
-          discovery: data.discovery_splash ? `https://cdn.discordapp.com/discovery-splashes/${robberGuildId}/${data.discovery_splash}.png?size=1024` : null
+          description: data.description,
+          icon,
+          banner,
+          splash,
+          discovery
         });
-      } else {
-        throw new Error('Enter User ID or Guild ID');
+        setRobberStatus('Server assets stolen in 4K resolution!');
       }
-      setRobberStatus('Success');
     } catch (e: any) {
       setRobberStatus(`Error: ${e.message}`);
     } finally {
@@ -1372,6 +1882,7 @@ export function CordApp() {
     setRobberStatus('');
     setRobberTargetId('');
     setRobberGuildId('');
+    setRobberFoundCandidates([]);
   };
 
   const toSnowflake = (date: string | number | Date) => {
@@ -2131,8 +2642,8 @@ export function CordApp() {
           <div className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-4 px-3">Modules</div>
           {[
             { id: 'channels', label: 'Channels', icon: Hash },
-            { id: 'mass-dm', label: 'Message Drafts', icon: FileText },
             { id: 'normal', label: 'Normal Typing', icon: MessageSquare },
+            { id: 'mass-dm', label: 'Mass DM', icon: Users },
             { id: 'force-nickname', label: 'Force Nickname', icon: User },
             { id: 'auto-reply', label: 'Auto Reply', icon: User },
             { id: 'anti-afk', label: 'Anti AFK', icon: Shield },
@@ -2408,23 +2919,6 @@ export function CordApp() {
                     </div>
                   )}
 
-                  {activeTab === 'mass-dm' && (
-                    <MassDmComposer
-                      contacts={Array.from(new Map(
-                        dms.flatMap((dm: any) => (dm.recipients || [])
-                          .filter((recipient: any) => recipient.id !== userId)
-                          .map((recipient: any) => [recipient.id, {
-                            id: recipient.id,
-                            username: recipient.username || 'Unknown user',
-                            avatar: recipient.avatar
-                              ? `https://cdn.discordapp.com/avatars/${recipient.id}/${recipient.avatar}.png`
-                              : null
-                          }])
-                        )
-                      ).values())}
-                    />
-                  )}
-
                   {activeTab === 'normal' && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between border-b border-white/5 pb-4">
@@ -2612,6 +3106,433 @@ export function CordApp() {
                   </div>
                 </div>
               )}
+
+              {activeTab === 'mass-dm' && (() => {
+                const query = massDmSearch.trim().toLowerCase();
+                const filteredFriends = friends.filter((rel) => {
+                  if (!query) return true;
+                  const u = rel.user;
+                  const uname = (u.username || '').toLowerCase();
+                  const gname = (u.global_name || u.display_name || '').toLowerCase();
+                  const nick = (rel.nickname || '').toLowerCase();
+                  return uname.includes(query) || gname.includes(query) || nick.includes(query) || u.id.includes(query);
+                });
+                const filteredIds = filteredFriends.map(f => f.user.id);
+                const selectedFilteredCount = filteredIds.filter(id => selectedFriendIds.has(id)).length;
+                const progressPercent = massDmProgress.total > 0 ? Math.round((massDmProgress.current / massDmProgress.total) * 100) : 0;
+
+                return (
+                  <div className="space-y-6">
+                    {/* Header */}
+                    <div className="border-b border-white/5 pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-xl font-bold italic font-display text-red-500">Mass DM</h2>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-red-600/20 text-red-400 border border-red-500/30">
+                            Anti-Spam • {massDmDelay.toFixed(1)}s + Typing
+                          </span>
+                        </div>
+                        <p className="text-xs text-white/40 font-mono mt-0.5">
+                          Send a message or image to selected friends with a {massDmDelay.toFixed(1)}s typing delay per DM
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-auto">
+                        {!massDmActive ? (
+                          <button
+                            onClick={handleStartMassDm}
+                            disabled={selectedFriendIds.size === 0 || (!massDmMessage.trim() && !massDmImageFile)}
+                            className="px-5 py-2 bg-red-700 hover:bg-red-600 active:scale-95 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-red-600/30 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+                          >
+                            <Send size={14} />
+                            <span>Start Mass DM ({selectedFriendIds.size})</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={handleStopMassDm}
+                            className="px-5 py-2 bg-white/10 hover:bg-red-600 text-white rounded-xl font-bold text-xs uppercase tracking-wider border border-red-500/40 transition-all flex items-center gap-2"
+                          >
+                            <Square size={14} className="fill-white" />
+                            <span>Stop</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Message & Image Composer */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      <div className="space-y-3 bg-black/40 border border-white/10 rounded-2xl p-4">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] uppercase font-bold text-white/50">
+                            DM Message (Optional if Image Attached)
+                          </label>
+                          <span className="text-[9px] font-mono text-white/30">
+                            {massDmMessage.length} chars
+                          </span>
+                        </div>
+                        <textarea
+                          value={massDmMessage}
+                          onChange={(e) => setMassDmMessage(e.target.value)}
+                          onPaste={(e) => {
+                            const items = e.clipboardData?.items;
+                            if (!items) return;
+                            for (const item of items) {
+                              if (item.type.startsWith('image/')) {
+                                const file = item.getAsFile();
+                                if (file) {
+                                  handleMassDmImageChange(file);
+                                }
+                                break;
+                              }
+                            }
+                          }}
+                          disabled={massDmActive}
+                          placeholder="Type the message to send to selected friends... (You can also paste an image here)"
+                          className="w-full bg-black/60 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-red-500/50 min-h-[120px] resize-none disabled:opacity-50"
+                        />
+
+                        {/* Anti-spam Timing & Typing Controls */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                          <div className="bg-black/50 border border-white/10 rounded-xl p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase font-bold text-white/50 flex items-center gap-1.5">
+                                <Clock size={12} className="text-red-500" />
+                                <span>DM Delay</span>
+                              </span>
+                              <span className="text-xs font-mono font-bold text-red-400">
+                                {massDmDelay.toFixed(1)}s
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min={3}
+                              max={15}
+                              step={0.5}
+                              value={massDmDelay}
+                              disabled={massDmActive}
+                              onChange={(e) => setMassDmDelay(Math.max(3, parseFloat(e.target.value)))}
+                              className="w-full accent-red-600 cursor-pointer"
+                            />
+                            <p className="text-[9px] text-white/30">Min 3.0s delay between DMs (no instant spam)</p>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={massDmActive}
+                            onClick={() => setMassDmTypingIndicator(!massDmTypingIndicator)}
+                            className={`flex flex-col justify-between p-3 rounded-xl border text-left transition-all disabled:opacity-50 ${
+                              massDmTypingIndicator
+                                ? 'bg-red-700/15 border-red-500/50 text-white'
+                                : 'bg-black/50 border-white/10 text-white/40'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="text-[10px] uppercase font-bold tracking-wider">
+                                Typing Indicator
+                              </span>
+                              <div className={`w-3.5 h-3.5 rounded-full border-2 ${massDmTypingIndicator ? 'bg-red-500 border-red-400' : 'border-white/20'}`} />
+                            </div>
+                            <span className="text-[10px] text-white/50 mt-2">
+                              {massDmTypingIndicator ? 'Shows "typing..." for 3s+ before sending' : 'Disabled (Wait only)'}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Image Attachment Box */}
+                      <div className="bg-black/40 border border-white/10 rounded-2xl p-4 flex flex-col justify-between space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] uppercase font-bold text-white/50 flex items-center gap-1.5">
+                            <ImageIcon size={12} className="text-red-500" />
+                            <span>Image Attachment (Optional)</span>
+                          </label>
+                          {massDmImageFile && (
+                            <button
+                              type="button"
+                              disabled={massDmActive}
+                              onClick={() => handleMassDmImageChange(null)}
+                              className="text-[10px] font-bold text-red-400 hover:text-red-300 flex items-center gap-1"
+                            >
+                              <X size={12} /> Remove
+                            </button>
+                          )}
+                        </div>
+
+                        {massDmImagePreview && massDmImageFile ? (
+                          <div className="flex-1 flex flex-col items-center justify-center bg-black/60 border border-white/10 rounded-xl p-3 space-y-2 overflow-hidden">
+                            <img
+                              src={massDmImagePreview}
+                              alt="Attachment preview"
+                              className="max-h-40 rounded-lg object-contain border border-white/10"
+                            />
+                            <div className="text-center">
+                              <p className="text-xs font-mono text-white/80 truncate max-w-[260px]">
+                                {massDmImageFile.name}
+                              </p>
+                              <p className="text-[10px] text-white/40">
+                                {(massDmImageFile.size / 1024).toFixed(1)} KB
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <label className="flex-1 min-h-[160px] flex flex-col items-center justify-center border-2 border-dashed border-white/10 hover:border-red-500/40 bg-black/40 hover:bg-red-500/5 rounded-xl p-6 cursor-pointer transition-all text-center group">
+                            <Upload size={26} className="text-white/25 group-hover:text-red-400 transition-colors mb-2" />
+                            <span className="text-xs font-bold text-white/60 group-hover:text-white">
+                              Click to Upload Image
+                            </span>
+                            <span className="text-[10px] text-white/30 mt-1">
+                              PNG, JPG, GIF, WEBP (up to 25MB)
+                            </span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              disabled={massDmActive}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0] || null;
+                                handleMassDmImageChange(file);
+                                e.target.value = '';
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Friends List Selection Panel */}
+                    <div className="bg-black/40 border border-white/10 rounded-2xl p-4 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Users size={15} className="text-red-500" />
+                          <span className="text-xs font-bold uppercase tracking-wider text-white">
+                            Friends List ({friends.length})
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-red-600/20 border border-red-500/30 text-[10px] font-mono font-bold text-red-400">
+                            {selectedFriendIds.size} selected
+                          </span>
+                          {selectedFriendIds.size > 0 && (
+                            <span className="text-[10px] font-mono text-white/40 hidden sm:inline">
+                              (~{Math.round(selectedFriendIds.size * massDmDelay)}s est.)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={refreshFriends}
+                            disabled={isRefreshingFriends || massDmActive || !token}
+                            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold uppercase text-white/70 hover:text-white transition-all flex items-center gap-1.5 disabled:opacity-40"
+                          >
+                            <RotateCcw size={11} className={isRefreshingFriends ? 'animate-spin text-red-400' : ''} />
+                            <span>Refresh</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={selectAllFriends}
+                            disabled={friends.length === 0 || massDmActive}
+                            className="px-3 py-1.5 rounded-lg bg-red-700/25 hover:bg-red-700/40 border border-red-500/40 text-[10px] font-bold uppercase text-red-300 hover:text-white transition-all flex items-center gap-1.5 disabled:opacity-40"
+                          >
+                            <CheckSquare size={11} />
+                            <span>Select All Friends ({friends.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={unselectAllFriends}
+                            disabled={selectedFriendIds.size === 0 || massDmActive}
+                            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold uppercase text-white/60 hover:text-white transition-all disabled:opacity-40"
+                          >
+                            Unselect All
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Search Bar + Filtered Quick Toggle */}
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <div className="relative flex-1">
+                          <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30" />
+                          <input
+                            type="text"
+                            value={massDmSearch}
+                            onChange={(e) => setMassDmSearch(e.target.value)}
+                            placeholder="Search friends by username, display name, or ID to select / unselect..."
+                            className="w-full bg-black/60 border border-white/10 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-red-500/50"
+                          />
+                          {massDmSearch && (
+                            <button
+                              type="button"
+                              onClick={() => setMassDmSearch('')}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white"
+                            >
+                              <X size={13} />
+                            </button>
+                          )}
+                        </div>
+
+                        {query && filteredFriends.length > 0 && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={massDmActive}
+                              onClick={() => selectFilteredFriends(filteredIds)}
+                              className="px-3 py-2 rounded-xl bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-[10px] font-bold uppercase text-red-300 transition-all"
+                            >
+                              Select Matches ({filteredFriends.length})
+                            </button>
+                            <button
+                              type="button"
+                              disabled={massDmActive || selectedFilteredCount === 0}
+                              onClick={() => unselectFilteredFriends(filteredIds)}
+                              className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold uppercase text-white/60 hover:text-white transition-all disabled:opacity-40"
+                            >
+                              Unselect Matches ({selectedFilteredCount})
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Scrollable Friends List */}
+                      <div className="bg-black/50 border border-white/5 rounded-xl overflow-hidden max-h-[300px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
+                        {!token ? (
+                          <div className="p-8 text-center text-white/30 text-xs">
+                            Enter your Discord User Token above to load your friends list.
+                          </div>
+                        ) : friends.length === 0 ? (
+                          <div className="p-8 text-center text-white/30 text-xs space-y-2">
+                            <p>{isRefreshingFriends ? 'Loading friends list...' : 'No friends found in your relationships list.'}</p>
+                            {!isRefreshingFriends && (
+                              <button
+                                type="button"
+                                onClick={refreshFriends}
+                                className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 text-[10px] uppercase font-bold border border-white/10"
+                              >
+                                Retry Fetch Friends
+                              </button>
+                            )}
+                          </div>
+                        ) : filteredFriends.length === 0 ? (
+                          <div className="p-8 text-center text-white/30 text-xs">
+                            No friends matching "{massDmSearch}".
+                          </div>
+                        ) : (
+                          filteredFriends.map((rel) => {
+                            const friend = rel.user;
+                            const isSelected = selectedFriendIds.has(friend.id);
+                            const displayName = rel.nickname || friend.global_name || friend.display_name || friend.username;
+                            return (
+                              <button
+                                key={friend.id}
+                                type="button"
+                                disabled={massDmActive}
+                                onClick={() => toggleFriendSelection(friend.id)}
+                                className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-all ${
+                                  isSelected
+                                    ? 'bg-red-700/15 hover:bg-red-700/20'
+                                    : 'hover:bg-white/[0.03]'
+                                } disabled:opacity-60`}
+                              >
+                                <div
+                                  className={`w-4 h-4 rounded flex items-center justify-center border transition-all shrink-0 ${
+                                    isSelected
+                                      ? 'bg-red-600 border-red-500 text-white'
+                                      : 'border-white/25 bg-black/40'
+                                  }`}
+                                >
+                                  {isSelected && <Check size={11} strokeWidth={3} />}
+                                </div>
+
+                                <div className="w-8 h-8 rounded-full bg-white/10 overflow-hidden flex items-center justify-center shrink-0">
+                                  {friend.avatar ? (
+                                    <img
+                                      src={`https://cdn.discordapp.com/avatars/${friend.id}/${friend.avatar}.png?size=128`}
+                                      alt={friend.username}
+                                      className="w-full h-full object-cover"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  ) : (
+                                    <User size={15} className="text-white/40" />
+                                  )}
+                                </div>
+
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-white/80'}`}>
+                                      {displayName}
+                                    </span>
+                                    <span className="text-[10px] font-mono text-white/40 truncate">
+                                      @{friend.username}
+                                    </span>
+                                  </div>
+                                  <p className="text-[9px] font-mono text-white/30 truncate">
+                                    ID: {friend.id}
+                                  </p>
+                                </div>
+
+                                <span
+                                  className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border ${
+                                    isSelected
+                                      ? 'bg-red-600/20 text-red-400 border-red-500/30'
+                                      : 'bg-white/5 text-white/30 border-white/10'
+                                  }`}
+                                >
+                                  {isSelected ? 'Selected' : 'Excluded'}
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Progress & Live Activity Log */}
+                    {(massDmStatus || massDmLogs.length > 0) && (
+                      <div className="bg-black/40 border border-white/10 rounded-2xl p-4 space-y-3">
+                        <div className="flex items-center justify-between text-xs font-mono">
+                          <span className="text-red-400 font-bold">{massDmStatus || 'Ready'}</span>
+                          {massDmProgress.total > 0 && (
+                            <span className="text-white/60">
+                              {massDmProgress.current}/{massDmProgress.total} ({progressPercent}%) • Sent: {massDmProgress.sent} • Failed: {massDmProgress.failed}
+                            </span>
+                          )}
+                        </div>
+
+                        {massDmProgress.total > 0 && (
+                          <div className="w-full h-2 bg-black/60 rounded-full overflow-hidden border border-white/10">
+                            <div
+                              className="h-full bg-red-600 transition-all duration-200"
+                              style={{ width: `${progressPercent}%` }}
+                            />
+                          </div>
+                        )}
+
+                        {massDmLogs.length > 0 && (
+                          <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-1 bg-black/60 rounded-xl p-3 border border-white/5 font-mono text-[11px]">
+                            {massDmLogs.map((log, idx) => (
+                              <div
+                                key={idx}
+                                className={`flex items-start gap-2 ${
+                                  log.type === 'success'
+                                    ? 'text-emerald-400'
+                                    : log.type === 'warn'
+                                    ? 'text-amber-400'
+                                    : log.type === 'error'
+                                    ? 'text-red-400'
+                                    : 'text-white/60'
+                                }`}
+                              >
+                                <span className="text-white/30 shrink-0">[{log.time}]</span>
+                                <span>{log.msg}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {activeTab === 'force-nickname' && (
                 <div className="space-y-6">
@@ -2808,126 +3729,479 @@ export function CordApp() {
 
               {activeTab === 'robber' && (
                 <div className="space-y-6">
-                  <div className="border-b border-white/5 pb-4 flex justify-between items-center">
-                    <h2 className="text-xl font-bold italic font-display text-red-500">Robber</h2>
-                    <div className="flex gap-2">
+                  {/* Robber Header */}
+                  <div className="border-b border-white/5 pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-xl font-bold italic font-display text-red-500">Robber</h2>
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-red-600/20 text-red-400 border border-red-500/30">
+                          4K Asset Stealer
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/40 font-mono mt-0.5">
+                        Find user IDs, profile pictures, and banners in uncompressed 4K resolution (4096px)
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
                       <button 
-                        onClick={handleRobber}
+                        onClick={() => handleRobber()}
                         disabled={isRobbing}
-                        className="px-6 py-2 bg-red-700 hover:bg-red-600 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-red-600/20 disabled:opacity-50"
+                        className="px-5 py-2 bg-red-700 hover:bg-red-600 active:scale-95 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-red-600/30 disabled:opacity-50 flex items-center gap-2"
                       >
-                        {isRobbing ? 'ROBBING...' : 'STEAL ASSETS'}
+                        {isRobbing ? (
+                          <>
+                            <RefreshCw size={14} className="animate-spin text-white" />
+                            <span>Stealing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Zap size={14} className="fill-white text-white" />
+                            <span>Steal Assets</span>
+                          </>
+                        )}
                       </button>
                       <button 
                         onClick={clearRobber}
-                        className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold text-sm transition-all"
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white rounded-xl font-bold text-xs uppercase tracking-wider border border-white/10 transition-all"
                       >
-                        CLEAR
+                        Clear
                       </button>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-[10px] uppercase font-bold text-white/40">User ID</label>
-                      <input 
-                        type="text"
-                        value={robberTargetId}
-                        onChange={(e) => setRobberTargetId(e.target.value)}
-                        placeholder="Target User ID"
-                        className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] uppercase font-bold text-white/40">Guild ID (Optional)</label>
-                      <input 
-                        type="text"
-                        value={robberGuildId}
-                        onChange={(e) => setRobberGuildId(e.target.value)}
-                        placeholder="Target Guild ID"
-                        className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50"
-                      />
-                    </div>
-                  </div>
-
-                  {robberStatus && (
-                    <div className="text-center text-xs font-mono text-red-400">{robberStatus}</div>
-                  )}
-
-                  {robberResult && (
-                    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                      {(robberResult.username || robberResult.name) && (
-                        <div className="text-center text-sm font-bold text-white">
-                          {robberResult.username || robberResult.name}
-                        </div>
-                      )}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-2">
-                          <h3 className="text-[10px] uppercase font-bold text-white/40">Avatar / Icon</h3>
-                          <div className="aspect-square bg-black/40 rounded-2xl border border-white/5 overflow-hidden flex items-center justify-center">
-                            {(robberResult.avatar || robberResult.icon || robberResult.userAvatar) ? (
-                              <img 
-                                src={robberResult.avatar || robberResult.icon || robberResult.userAvatar} 
-                                alt="Avatar" 
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                                onError={(e) => {
-                                  const img = e.currentTarget;
-                                  if (img.src.includes('.gif')) img.src = img.src.replace('.gif', '.png');
-                                }}
-                              />
-                            ) : (
-                              <User size={48} className="text-white/10" />
-                            )}
-                          </div>
-                          {(robberResult.avatar || robberResult.icon || robberResult.userAvatar) && (
-                            <a 
-                              href={robberResult.avatar || robberResult.icon || robberResult.userAvatar} 
-                              target="_blank" 
-                              rel="noreferrer"
-                              className="block text-center text-[10px] text-red-500 hover:underline"
+                  {/* Input Controls */}
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-bold text-white/50 flex items-center justify-between">
+                          <span>User ID, Username, or Link</span>
+                          <span className="text-[9px] text-white/30 lowercase">accepts ID, @user, or profile URL</span>
+                        </label>
+                        <div className="relative">
+                          <input 
+                            type="text"
+                            value={robberTargetId}
+                            onChange={(e) => setRobberTargetId(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleRobber();
+                            }}
+                            placeholder="e.g. 104875638291029384, @slendo, or discord.com/users/..."
+                            className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-red-500/50 transition-all font-mono"
+                          />
+                          {robberTargetId && (
+                            <button
+                              onClick={() => setRobberTargetId('')}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white text-xs"
                             >
-                              Open Original
-                            </a>
-                          )}
-                        </div>
-
-                        <div className="space-y-2">
-                          <h3 className="text-[10px] uppercase font-bold text-white/40">Banner</h3>
-                          <div className="aspect-video bg-black/40 rounded-2xl border border-white/5 overflow-hidden flex items-center justify-center">
-                            {(robberResult.banner || robberResult.userBanner || robberResult.discovery) ? (
-                              <img 
-                                src={robberResult.banner || robberResult.userBanner || robberResult.discovery} 
-                                alt="Banner" 
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                                onError={(e) => {
-                                  const img = e.currentTarget;
-                                  if (img.src.includes('.gif')) img.src = img.src.replace('.gif', '.png');
-                                }}
-                              />
-                            ) : (
-                              <div className="text-[10px] text-white/10 uppercase font-bold">No Banner</div>
-                            )}
-                          </div>
-                          {(robberResult.banner || robberResult.userBanner || robberResult.discovery) && (
-                            <a 
-                              href={robberResult.banner || robberResult.userBanner || robberResult.discovery} 
-                              target="_blank" 
-                              rel="noreferrer"
-                              className="block text-center text-[10px] text-red-500 hover:underline"
-                            >
-                              Open Original
-                            </a>
+                              ✕
+                            </button>
                           )}
                         </div>
                       </div>
 
-                      {robberResult.type === 'member' && robberResult.avatar && (
-                        <div className="p-4 bg-red-500/5 border border-red-500/10 rounded-xl">
-                          <p className="text-[10px] text-red-500/60 leading-relaxed text-center">
-                            This user has a server-specific avatar. Both global and server assets are shown above.
-                          </p>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-bold text-white/50 flex items-center justify-between">
+                          <span>Guild ID (Optional)</span>
+                          <span className="text-[9px] text-white/30 lowercase">for server avatar & banner</span>
+                        </label>
+                        <input 
+                          type="text"
+                          value={robberGuildId}
+                          onChange={(e) => setRobberGuildId(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRobber();
+                          }}
+                          placeholder="Target Server / Guild ID"
+                          className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-red-500/50 transition-all font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick Selection from loaded DMs */}
+                    {dms.length > 0 && (
+                      <div className="space-y-1.5 p-3 rounded-xl bg-white/[0.02] border border-white/5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] uppercase font-bold text-white/50 flex items-center gap-1.5">
+                            <Users size={12} className="text-red-500" />
+                            <span>Quick Select User from Recent DMs / Friends</span>
+                          </label>
+                          <span className="text-[9px] text-white/30">{dms.length} loaded</span>
+                        </div>
+                        <select
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              setRobberTargetId(e.target.value);
+                              handleRobber(e.target.value);
+                            }
+                          }}
+                          value=""
+                          className="w-full bg-black/60 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 focus:outline-none focus:border-red-500/50 cursor-pointer"
+                        >
+                          <option value="">-- Click to choose any user from your DMs --</option>
+                          {dms
+                            .filter((c: any) => c.recipients && c.recipients.length > 0)
+                            .map((c: any) => {
+                              const r = c.recipients[0];
+                              const displayName = r.global_name || r.display_name || r.username;
+                              return (
+                                <option key={c.id} value={r.id}>
+                                  {displayName} (@{r.username}) — ID: {r.id}
+                                </option>
+                              );
+                            })}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Multiple Candidates Selector */}
+                    {robberFoundCandidates.length > 0 && (
+                      <div className="p-3 bg-red-950/20 border border-red-500/20 rounded-xl space-y-2">
+                        <p className="text-[10px] uppercase font-bold text-red-400">
+                          Multiple matching users found. Click one to steal:
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {robberFoundCandidates.map((cand) => (
+                            <button
+                              key={cand.id}
+                              onClick={() => {
+                                setRobberTargetId(cand.id);
+                                handleRobber(cand.id, cand.guildId);
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-black/60 hover:bg-red-700/30 border border-white/10 hover:border-red-500/40 text-xs text-white flex items-center gap-2 transition-all"
+                            >
+                              <span className="font-bold">{cand.global_name || cand.username}</span>
+                              <span className="text-[10px] text-white/40 font-mono">(@{cand.username})</span>
+                              <span className="text-[9px] text-red-400 font-mono">ID: {cand.id}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Status Banner */}
+                  {robberStatus && (
+                    <div className={`p-3 rounded-xl border text-xs font-mono text-center transition-all ${
+                      robberStatus.startsWith('Error') 
+                        ? 'bg-red-950/30 border-red-500/30 text-red-400' 
+                        : robberStatus.includes('success') || robberStatus.includes('stolen')
+                        ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-400'
+                        : 'bg-white/5 border-white/10 text-white/70'
+                    }`}>
+                      {robberStatus}
+                    </div>
+                  )}
+
+                  {/* Stolen Asset Results Showcase */}
+                  {robberResult && (
+                    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                      {robberResult.type === 'user' && (
+                        <div className="bg-black/40 border border-white/10 rounded-2xl overflow-hidden glass-card">
+                          {/* Profile Banner Header */}
+                          <div className="relative h-44 sm:h-52 w-full overflow-hidden bg-black/80 flex items-center justify-center">
+                            {robberResult.banner ? (
+                              <img 
+                                src={robberResult.banner} 
+                                alt="User Banner"
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : robberResult.accentColor ? (
+                              <div 
+                                className="w-full h-full flex flex-col items-center justify-center relative"
+                                style={{
+                                  backgroundColor: robberResult.accentColor,
+                                  backgroundImage: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.3) 100%)'
+                                }}
+                              >
+                                <span className="px-3 py-1 rounded-full bg-black/50 text-[10px] font-mono text-white/90 uppercase tracking-widest font-bold backdrop-blur-sm border border-white/10">
+                                  Profile Color Banner: {robberResult.accentColor}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="text-xs uppercase tracking-widest font-mono text-white/20">
+                                No Custom Banner
+                              </div>
+                            )}
+
+                            {/* Banner Action Badges */}
+                            {robberResult.banner && (
+                              <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded-md bg-black/70 backdrop-blur-md text-[9px] font-bold text-red-400 border border-red-500/30 uppercase tracking-wider">
+                                  {robberResult.isAnimatedBanner ? 'GIF 4K' : 'PNG 4K'}
+                                </span>
+                                <a 
+                                  href={robberResult.banner} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="px-2.5 py-1 rounded-md bg-black/70 hover:bg-red-600 text-white backdrop-blur-md text-[10px] font-bold border border-white/20 transition-all flex items-center gap-1"
+                                >
+                                  <ExternalLink size={11} />
+                                  <span>4K View</span>
+                                </a>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Profile Body with Avatar Overlap */}
+                          <div className="px-6 pb-6 pt-3 space-y-5">
+                            <div className="flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4 -mt-16 sm:-mt-20">
+                              <div className="flex items-end gap-4">
+                                <div className="relative group">
+                                  <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden border-4 border-black bg-black shadow-2xl relative">
+                                    <img 
+                                      src={robberResult.avatar} 
+                                      alt={robberResult.username}
+                                      className="w-full h-full object-cover"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                    <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 text-[8px] font-bold uppercase tracking-wider text-red-400 border border-red-500/40">
+                                      {robberResult.isAnimatedAvatar ? 'GIF 4K' : '4K'}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="space-y-1 mb-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <h3 className="text-lg sm:text-xl font-bold text-white leading-tight">
+                                      {robberResult.globalName || robberResult.username}
+                                    </h3>
+                                    {robberResult.nickname && (
+                                      <span className="text-xs text-white/50 font-normal">
+                                        (Server Nick: {robberResult.nickname})
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-white/50 font-mono">
+                                    @{robberResult.username}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Action Badges & ID Copy */}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={() => copyToClipboard(robberResult.id, 'id')}
+                                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 text-xs font-mono text-white/80 hover:text-white transition-all flex items-center gap-1.5"
+                                  title="Copy Discord Snowflake ID"
+                                >
+                                  {copiedText === 'id' ? (
+                                    <>
+                                      <Check size={12} className="text-emerald-400" />
+                                      <span className="text-emerald-400 font-bold">Copied ID!</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy size={12} className="text-red-400" />
+                                      <span>ID: {robberResult.id}</span>
+                                    </>
+                                  )}
+                                </button>
+                                {robberResult.createdAt && (
+                                  <span className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-mono text-white/50">
+                                    Created: {robberResult.createdAt}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* User Bio if present */}
+                            {robberResult.bio && (
+                              <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                                <span className="text-[9px] uppercase font-bold text-white/40 tracking-wider">About Me</span>
+                                <p className="text-xs text-white/80 whitespace-pre-wrap leading-relaxed font-sans">
+                                  {robberResult.bio}
+                                </p>
+                              </div>
+                            )}
+
+                            {/* Asset Quality Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                              {/* Avatar Download Card */}
+                              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] uppercase font-bold tracking-wider text-white/60">
+                                    Profile Picture (4K UHD)
+                                  </span>
+                                  <span className="text-[9px] font-mono text-red-400">4096 × 4096</span>
+                                </div>
+                                <div className="aspect-square max-h-56 mx-auto rounded-xl overflow-hidden border border-white/10 bg-black/40 flex items-center justify-center">
+                                  <img 
+                                    src={robberResult.avatar} 
+                                    alt="4K Avatar"
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => copyToClipboard(robberResult.avatar, 'avatar')}
+                                    className="flex-1 py-2 px-3 rounded-lg bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 text-[11px] font-bold text-white transition-all flex items-center justify-center gap-1.5"
+                                  >
+                                    {copiedText === 'avatar' ? (
+                                      <>
+                                        <Check size={12} className="text-emerald-400" />
+                                        <span className="text-emerald-400">Copied!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Copy size={12} />
+                                        <span>Copy Link</span>
+                                      </>
+                                    )}
+                                  </button>
+                                  <a 
+                                    href={robberResult.avatar} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    className="flex-1 py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 text-[11px] font-bold transition-all text-center flex items-center justify-center gap-1.5"
+                                  >
+                                    <ExternalLink size={12} />
+                                    <span>Open 4K</span>
+                                  </a>
+                                </div>
+                              </div>
+
+                              {/* Banner Download Card */}
+                              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3 flex flex-col justify-between">
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] uppercase font-bold tracking-wider text-white/60">
+                                      Profile Banner (4K UHD)
+                                    </span>
+                                    {robberResult.banner && (
+                                      <span className="text-[9px] font-mono text-red-400">4096 px</span>
+                                    )}
+                                  </div>
+                                  <div className="aspect-video max-h-56 mx-auto w-full rounded-xl overflow-hidden border border-white/10 bg-black/40 flex items-center justify-center">
+                                    {robberResult.banner ? (
+                                      <img 
+                                        src={robberResult.banner} 
+                                        alt="4K Banner"
+                                        className="w-full h-full object-cover"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    ) : robberResult.accentColor ? (
+                                      <div 
+                                        className="w-full h-full flex flex-col items-center justify-center p-4 text-center"
+                                        style={{ backgroundColor: robberResult.accentColor }}
+                                      >
+                                        <span className="px-2.5 py-1 rounded bg-black/60 text-[11px] font-bold text-white font-mono">
+                                          Accent: {robberResult.accentColor}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="text-[11px] text-white/30 uppercase font-bold">
+                                        No Banner Set
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                {robberResult.banner ? (
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => copyToClipboard(robberResult.banner, 'banner')}
+                                      className="flex-1 py-2 px-3 rounded-lg bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 text-[11px] font-bold text-white transition-all flex items-center justify-center gap-1.5"
+                                    >
+                                      {copiedText === 'banner' ? (
+                                        <>
+                                          <Check size={12} className="text-emerald-400" />
+                                          <span className="text-emerald-400">Copied!</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Copy size={12} />
+                                          <span>Copy Link</span>
+                                        </>
+                                      )}
+                                    </button>
+                                    <a 
+                                      href={robberResult.banner} 
+                                      target="_blank" 
+                                      rel="noreferrer"
+                                      className="flex-1 py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 text-[11px] font-bold transition-all text-center flex items-center justify-center gap-1.5"
+                                    >
+                                      <ExternalLink size={12} />
+                                      <span>Open 4K</span>
+                                    </a>
+                                  </div>
+                                ) : robberResult.accentColor ? (
+                                  <button
+                                    onClick={() => copyToClipboard(robberResult.accentColor, 'color')}
+                                    className="w-full py-2 px-3 rounded-lg bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 text-[11px] font-bold text-white transition-all flex items-center justify-center gap-1.5"
+                                  >
+                                    {copiedText === 'color' ? (
+                                      <>
+                                        <Check size={12} className="text-emerald-400" />
+                                        <span className="text-emerald-400">Copied Hex Code!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Copy size={12} />
+                                        <span>Copy Color: {robberResult.accentColor}</span>
+                                      </>
+                                    )}
+                                  </button>
+                                ) : (
+                                  <div className="text-center text-[10px] text-white/30 italic py-2">
+                                    Default Discord profile background
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Guild Assets Result */}
+                      {robberResult.type === 'guild' && (
+                        <div className="bg-black/40 border border-white/10 rounded-2xl p-6 glass-card space-y-6">
+                          <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                            <div>
+                              <h3 className="text-lg font-bold text-white">{robberResult.name}</h3>
+                              <p className="text-xs text-white/40 font-mono">Guild ID: {robberResult.id}</p>
+                            </div>
+                            <button
+                              onClick={() => copyToClipboard(robberResult.id, 'guildId')}
+                              className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white/70 flex items-center gap-1.5"
+                            >
+                              <Copy size={12} />
+                              <span>Copy Guild ID</span>
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-2">
+                              <span className="text-[10px] uppercase font-bold text-white/50">Server Icon (4K)</span>
+                              <div className="aspect-square bg-black/60 rounded-xl border border-white/10 overflow-hidden flex items-center justify-center">
+                                {robberResult.icon ? (
+                                  <img src={robberResult.icon} alt="Guild Icon" className="w-full h-full object-cover" />
+                                ) : (
+                                  <span className="text-xs text-white/20">No Icon</span>
+                                )}
+                              </div>
+                              {robberResult.icon && (
+                                <a href={robberResult.icon} target="_blank" rel="noreferrer" className="block text-center text-xs text-red-400 hover:underline">
+                                  Open 4K Icon
+                                </a>
+                              )}
+                            </div>
+
+                            <div className="space-y-2">
+                              <span className="text-[10px] uppercase font-bold text-white/50">Server Banner (4K)</span>
+                              <div className="aspect-video bg-black/60 rounded-xl border border-white/10 overflow-hidden flex items-center justify-center">
+                                {robberResult.banner ? (
+                                  <img src={robberResult.banner} alt="Guild Banner" className="w-full h-full object-cover" />
+                                ) : (
+                                  <span className="text-xs text-white/20">No Banner</span>
+                                )}
+                              </div>
+                              {robberResult.banner && (
+                                <a href={robberResult.banner} target="_blank" rel="noreferrer" className="block text-center text-xs text-red-400 hover:underline">
+                                  Open 4K Banner
+                                </a>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -4167,7 +5441,7 @@ export function CordApp() {
                             <h4 className="text-[10px] font-bold uppercase tracking-wider text-white/60">About Me</h4>
                             <div className="bg-black/40 rounded-lg p-3 border border-white/5">
                               <p className="text-xs text-white/80 leading-relaxed whitespace-pre-wrap">
-                                𖤐 | I'm retired.
+                                𖤐 | gg/slendo
                               </p>
                             </div>
                           </div>
@@ -4187,6 +5461,10 @@ export function CordApp() {
                           <p className="text-white/80">Updates will be coming soon if needed or if I get ideas.</p>
                           <p className="text-white/80"><span className="text-red-500">v1.0.0</span> is the current version you are using — more versions may come soon.</p>
                           <p className="text-white/80">I hope you enjoy my cord.</p>
+                        </div>
+
+                        <div className="pt-2">
+                          <p className="text-xs text-white font-bold">LET'S PACK 😂 jokes. Na fr come pack wit me <span className="text-red-500">🔥</span></p>
                         </div>
                       </div>
                     </div>
@@ -4447,3 +5725,5 @@ export function CordApp() {
     </div>
   );
 }
+
+export default CordApp;
