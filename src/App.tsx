@@ -17,6 +17,7 @@ import {
   Play,
   Square,
   ChevronRight,
+  ChevronDown,
   User,
   Quote,
   Hash,
@@ -72,6 +73,64 @@ declare global {
     YT: any;
   }
 }
+
+// Sidebar navigation, grouped into categories instead of one flat module list.
+type NavItem = { id: TabType; label: string; icon: any };
+type NavCategory = { id: string; label: string; icon: any; items: NavItem[] };
+
+const NAV_CATEGORIES: NavCategory[] = [
+  {
+    id: 'beefing',
+    label: 'Beefing',
+    icon: ShieldAlert,
+    items: [
+      { id: 'normal', label: 'Normal Typing', icon: MessageSquare },
+      { id: 'autobeefer', label: 'AutoBeefer', icon: Activity },
+      { id: 'legit', label: 'Legit Beefer', icon: ShieldAlert },
+      { id: 'robber', label: 'Robber', icon: Search },
+    ],
+  },
+  {
+    id: 'server',
+    label: 'Server',
+    icon: Server,
+    items: [
+      { id: 'channels', label: 'Channels', icon: Hash },
+      { id: 'mass-dm', label: 'Mass DM', icon: Users },
+      { id: 'force-nickname', label: 'Force Nickname', icon: User },
+      { id: 'gc-changer', label: 'GC Changer', icon: RefreshCw },
+      { id: 'wl-gen', label: 'WL Generator', icon: Zap },
+    ],
+  },
+  {
+    id: 'discord',
+    label: 'Discord',
+    icon: MessageSquare,
+    items: [
+      { id: 'auto-reply', label: 'Auto Reply', icon: MessageSquare },
+      { id: 'anti-afk', label: 'Anti AFK', icon: Shield },
+      { id: 'afk-check', label: 'AFK Check', icon: Activity },
+      { id: 'delete-messages', label: 'Delete Messages', icon: Trash2 },
+    ],
+  },
+  {
+    id: 'account',
+    label: 'Account',
+    icon: User,
+    items: [
+      { id: 'about-me', label: 'About Me', icon: User },
+      { id: 'song', label: 'Song', icon: Music },
+    ],
+  },
+  {
+    id: 'utility',
+    label: 'Utility',
+    icon: Settings,
+    items: [
+      { id: 'options', label: 'Options', icon: Settings },
+    ],
+  },
+];
 
 // Error Boundary Component
 class ErrorBoundary extends (React.Component as any) {
@@ -157,6 +216,14 @@ export function CordApp() {
   // Global State
   const [hasEntered, setHasEntered] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('normal');
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const toggleCategory = useCallback((id: string) => {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
   const [token, setToken] = useState('');
   const [tokenStatus, setTokenStatus] = useState<
     'idle' | 'checking' | 'connected' | 'rejected' | 'session-expired' | 'unavailable'
@@ -328,6 +395,8 @@ export function CordApp() {
   const ytPlayerRef = useRef<any>(null);
   const ytPlayerReadyRef = useRef(false);
   const pendingPlayRef = useRef(false);
+  const errorSkipCountRef = useRef(0);
+  const skipDeadTrackRef = useRef<() => void>(() => {});
 
   const addDeleteLog = (msg: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
     setDeleteLog(prev => [{ msg, type, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 100));
@@ -360,7 +429,9 @@ export function CordApp() {
           width: '100%',
           videoId: initialId,
           playerVars: {
-            autoplay: 0,
+            autoplay: 1,
+            mute: 1,
+            origin: window.location.origin,
             controls: 0,
             modestbranding: 1,
             rel: 0,
@@ -375,7 +446,11 @@ export function CordApp() {
           events: {
             onReady: (event: any) => {
               ytPlayerReadyRef.current = true;
+              errorSkipCountRef.current = 0;
               try {
+                if (event.target && typeof event.target.setVolume === 'function') {
+                  event.target.setVolume(volume);
+                }
                 if (event.target && typeof event.target.unloadModule === 'function') {
                   event.target.unloadModule('captions');
                 }
@@ -396,6 +471,7 @@ export function CordApp() {
                 }
               } catch (e) {}
               if (event.data === window.YT.PlayerState.PLAYING) {
+                errorSkipCountRef.current = 0;
                 setIsPlaying(true);
               } else if (event.data === window.YT.PlayerState.PAUSED) {
                 setIsPlaying(false);
@@ -407,6 +483,19 @@ export function CordApp() {
                   handleSkip();
                 }
               }
+            },
+            onError: () => {
+              // 2/5/100: bad or missing video. 101/150: embedding disabled.
+              // Move on instead of leaving YouTube's "video unavailable" card up.
+              skipDeadTrackRef.current();
+            },
+            onAutoplayBlocked: () => {
+              // Browsers only permit silent autoplay, so the backdrop starts
+              // muted and unmutes on the first click or keypress.
+              try {
+                ytPlayerRef.current?.mute();
+                ytPlayerRef.current?.playVideo();
+              } catch (e) {}
             }
           }
         });
@@ -418,6 +507,23 @@ export function CordApp() {
     if (window.YT && window.YT.Player) {
       initPlayer();
     }
+
+    // First gesture unlocks sound; the video itself is already playing muted.
+    const resumeWithSound = () => {
+      const player = ytPlayerRef.current;
+      if (!player || !ytPlayerReadyRef.current) return;
+      try {
+        if (typeof player.unMute === 'function') player.unMute();
+        if (typeof player.setVolume === 'function') player.setVolume(volume);
+        const state = typeof player.getPlayerState === 'function' ? player.getPlayerState() : -1;
+        // 1 = playing, 2 = paused by the user. Anything else still needs a start.
+        if (state !== 1 && state !== 2 && typeof player.playVideo === 'function') {
+          player.playVideo();
+        }
+      } catch (e) {}
+    };
+    document.addEventListener('pointerdown', resumeWithSound, true);
+    document.addEventListener('keydown', resumeWithSound, true);
 
     const interval = setInterval(() => {
       if (ytPlayerRef.current && ytPlayerReadyRef.current && isPlaying) {
@@ -431,7 +537,11 @@ export function CordApp() {
       }
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('pointerdown', resumeWithSound, true);
+      document.removeEventListener('keydown', resumeWithSound, true);
+    };
   }, [isPlaying, loopMode]);
 
   const handleSearch = async (placement: 'header' | 'module' = 'module') => {
@@ -589,6 +699,23 @@ export function CordApp() {
     setCurrentSongIndex(nextIndex);
     loadAndPlayTrack(songQueue[nextIndex].id);
   };
+
+  // The player's onError fires long after this render, so keep the recovery
+  // path in a ref that is refreshed every render. It gives up after one full
+  // lap of the queue so a run of unplayable videos cannot loop forever.
+  useEffect(() => {
+    skipDeadTrackRef.current = () => {
+      if (errorSkipCountRef.current >= Math.max(songQueue.length, 1)) {
+        errorSkipCountRef.current = 0;
+        setIsPlaying(false);
+        return;
+      }
+      errorSkipCountRef.current += 1;
+      const nextIndex = songQueue.length > 1 ? (currentSongIndex + 1) % songQueue.length : 0;
+      setCurrentSongIndex(nextIndex);
+      loadAndPlayTrack(songQueue[nextIndex]?.id);
+    };
+  });
 
   const togglePlay = () => {
     if (!ytPlayerRef.current || !ytPlayerReadyRef.current) return;
@@ -2639,52 +2766,70 @@ export function CordApp() {
       <main className="max-w-5xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-8">
         {/* Sidebar Navigation */}
         <nav className="space-y-1">
-          <div className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-4 px-3">Modules</div>
-          {[
-            { id: 'channels', label: 'Channels', icon: Hash },
-            { id: 'normal', label: 'Normal Typing', icon: MessageSquare },
-            { id: 'mass-dm', label: 'Mass DM', icon: Users },
-            { id: 'force-nickname', label: 'Force Nickname', icon: User },
-            { id: 'auto-reply', label: 'Auto Reply', icon: User },
-            { id: 'anti-afk', label: 'Anti AFK', icon: Shield },
-            { id: 'afk-check', label: 'AFK Check', icon: Activity },
-            { id: 'delete-messages', label: 'Delete Messages', icon: Trash2 },
-            { id: 'robber', label: 'Robber', icon: Search },
-            { id: 'gc-changer', label: 'GC Changer', icon: RefreshCw },
-            { id: 'wl-gen', label: 'WL Generator', icon: Zap },
-            { id: 'autobeefer', label: 'AutoBeefer', icon: Activity },
-            { id: 'legit', label: 'Legit Beefer', icon: ShieldAlert },
-            { id: 'song', label: 'Song', icon: Music },
-            { id: 'about-me', label: 'About Me', icon: User },
-            { id: 'options', label: 'Options', icon: Settings },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id as TabType);
-                if (tab.id === 'song') {
-                  setShowSongNotif(true);
-                  const audio = new Audio('https://www.myinstants.com/media/sounds/discord-notification.mp3');
-                  audio.volume = 0.5;
-                  audio.play().catch(e => console.error("Audio play failed:", e));
-                  setTimeout(() => setShowSongNotif(false), 5000);
-                }
-              }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group ${
-                activeTab === tab.id 
-                  ? 'bg-red-700 text-white shadow-lg shadow-red-600/20' 
-                  : 'text-white/50 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <tab.icon size={16} className={activeTab === tab.id ? 'text-white' : 'text-white/40 group-hover:text-white'} />
-              <span className="font-medium">{tab.label}</span>
-              {activeTab === tab.id && (
-                <motion.div layoutId="active-pill" className="ml-auto">
-                  <ChevronRight size={14} />
-                </motion.div>
-              )}
-            </button>
-          ))}
+          <div className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-4 px-3">Categories</div>
+          {NAV_CATEGORIES.map((category) => {
+            const CategoryIcon = category.icon;
+            const isOpen = !collapsedCategories.has(category.id);
+            return (
+              <div key={category.id} className="mb-2">
+                <button
+                  onClick={() => toggleCategory(category.id)}
+                  aria-expanded={isOpen}
+                  aria-controls={`nav-category-${category.id}`}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-[0.18em] text-white/40 hover:text-white/80 hover:bg-white/5 transition-all duration-200"
+                >
+                  <CategoryIcon size={12} className="text-red-500/70" />
+                  <span>{category.label}</span>
+                  <span className="ml-auto text-white/30">
+                    {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </span>
+                </button>
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div
+                      id={`nav-category-${category.id}`}
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.18 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-1 pt-1 pb-1">
+                        {category.items.map((tab) => (
+                          <button
+                            key={tab.id}
+                            onClick={() => {
+                              setActiveTab(tab.id);
+                              if (tab.id === 'song') {
+                                setShowSongNotif(true);
+                                const audio = new Audio('https://www.myinstants.com/media/sounds/discord-notification.mp3');
+                                audio.volume = 0.5;
+                                audio.play().catch(e => console.error("Audio play failed:", e));
+                                setTimeout(() => setShowSongNotif(false), 5000);
+                              }
+                            }}
+                            className={`w-full flex items-center gap-3 pl-5 pr-3 py-2.5 rounded-lg text-sm transition-all duration-200 group ${
+                              activeTab === tab.id
+                                ? 'bg-red-700 text-white shadow-lg shadow-red-600/20'
+                                : 'text-white/50 hover:bg-white/5 hover:text-white'
+                            }`}
+                          >
+                            <tab.icon size={16} className={activeTab === tab.id ? 'text-white' : 'text-white/40 group-hover:text-white'} />
+                            <span className="font-medium">{tab.label}</span>
+                            {activeTab === tab.id && (
+                              <motion.div layoutId="active-pill" className="ml-auto">
+                                <ChevronRight size={14} />
+                              </motion.div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
         </nav>
 
         {/* Content Area */}
