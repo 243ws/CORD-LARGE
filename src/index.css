@@ -39,6 +39,20 @@ body {
   background: rgba(198, 40, 40, 0.5);
 }
 
+/* YouTube backdrop. The IFrame API writes its own width and height onto the
+   iframe it injects, which left it as a small box pinned near the left edge
+   instead of filling the 16:9 stage reserved behind the UI. */
+#youtube-player-api iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  border: 0 !important;
+  pointer-events: none !important;
+}
+
 /* Splash Screen */
 .splash-overlay {
   position: fixed;

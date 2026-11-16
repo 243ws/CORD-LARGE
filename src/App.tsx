@@ -395,6 +395,8 @@ export function CordApp() {
   const ytPlayerRef = useRef<any>(null);
   const ytPlayerReadyRef = useRef(false);
   const pendingPlayRef = useRef(false);
+  const errorSkipCountRef = useRef(0);
+  const skipDeadTrackRef = useRef<() => void>(() => {});
 
   const addDeleteLog = (msg: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
     setDeleteLog(prev => [{ msg, type, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 100));
@@ -427,7 +429,9 @@ export function CordApp() {
           width: '100%',
           videoId: initialId,
           playerVars: {
-            autoplay: 0,
+            autoplay: 1,
+            mute: 1,
+            origin: window.location.origin,
             controls: 0,
             modestbranding: 1,
             rel: 0,
@@ -442,7 +446,11 @@ export function CordApp() {
           events: {
             onReady: (event: any) => {
               ytPlayerReadyRef.current = true;
+              errorSkipCountRef.current = 0;
               try {
+                if (event.target && typeof event.target.setVolume === 'function') {
+                  event.target.setVolume(volume);
+                }
                 if (event.target && typeof event.target.unloadModule === 'function') {
                   event.target.unloadModule('captions');
                 }
@@ -463,6 +471,7 @@ export function CordApp() {
                 }
               } catch (e) {}
               if (event.data === window.YT.PlayerState.PLAYING) {
+                errorSkipCountRef.current = 0;
                 setIsPlaying(true);
               } else if (event.data === window.YT.PlayerState.PAUSED) {
                 setIsPlaying(false);
@@ -474,6 +483,19 @@ export function CordApp() {
                   handleSkip();
                 }
               }
+            },
+            onError: () => {
+              // 2/5/100: bad or missing video. 101/150: embedding disabled.
+              // Move on instead of leaving YouTube's "video unavailable" card up.
+              skipDeadTrackRef.current();
+            },
+            onAutoplayBlocked: () => {
+              // Browsers only permit silent autoplay, so the backdrop starts
+              // muted and unmutes on the first click or keypress.
+              try {
+                ytPlayerRef.current?.mute();
+                ytPlayerRef.current?.playVideo();
+              } catch (e) {}
             }
           }
         });
@@ -485,6 +507,23 @@ export function CordApp() {
     if (window.YT && window.YT.Player) {
       initPlayer();
     }
+
+    // First gesture unlocks sound; the video itself is already playing muted.
+    const resumeWithSound = () => {
+      const player = ytPlayerRef.current;
+      if (!player || !ytPlayerReadyRef.current) return;
+      try {
+        if (typeof player.unMute === 'function') player.unMute();
+        if (typeof player.setVolume === 'function') player.setVolume(volume);
+        const state = typeof player.getPlayerState === 'function' ? player.getPlayerState() : -1;
+        // 1 = playing, 2 = paused by the user. Anything else still needs a start.
+        if (state !== 1 && state !== 2 && typeof player.playVideo === 'function') {
+          player.playVideo();
+        }
+      } catch (e) {}
+    };
+    document.addEventListener('pointerdown', resumeWithSound, true);
+    document.addEventListener('keydown', resumeWithSound, true);
 
     const interval = setInterval(() => {
       if (ytPlayerRef.current && ytPlayerReadyRef.current && isPlaying) {
@@ -498,7 +537,11 @@ export function CordApp() {
       }
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('pointerdown', resumeWithSound, true);
+      document.removeEventListener('keydown', resumeWithSound, true);
+    };
   }, [isPlaying, loopMode]);
 
   const handleSearch = async (placement: 'header' | 'module' = 'module') => {
@@ -656,6 +699,23 @@ export function CordApp() {
     setCurrentSongIndex(nextIndex);
     loadAndPlayTrack(songQueue[nextIndex].id);
   };
+
+  // The player's onError fires long after this render, so keep the recovery
+  // path in a ref that is refreshed every render. It gives up after one full
+  // lap of the queue so a run of unplayable videos cannot loop forever.
+  useEffect(() => {
+    skipDeadTrackRef.current = () => {
+      if (errorSkipCountRef.current >= Math.max(songQueue.length, 1)) {
+        errorSkipCountRef.current = 0;
+        setIsPlaying(false);
+        return;
+      }
+      errorSkipCountRef.current += 1;
+      const nextIndex = songQueue.length > 1 ? (currentSongIndex + 1) % songQueue.length : 0;
+      setCurrentSongIndex(nextIndex);
+      loadAndPlayTrack(songQueue[nextIndex]?.id);
+    };
+  });
 
   const togglePlay = () => {
     if (!ytPlayerRef.current || !ytPlayerReadyRef.current) return;
