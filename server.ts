@@ -157,10 +157,12 @@ app.post("/api/access/logout", (req, res) => {
 
 // Protect the app's API endpoints. The client bundle only exposes the login gate;
 // app features and their data endpoints require a valid server session.
-// The Discord proxy stays public: a token pasted on the page is checked against
-// Discord itself, so it must never be refused because an app session is missing.
+// The endpoints the public layout itself calls stay open: a token pasted on the
+// page is checked against Discord itself, so it must never be refused because an
+// app session is missing, and the same goes for the panel's own search/OAuth calls.
+const publicApiPrefixes = ["/discord", "/search", "/auth"];
 app.use("/api", (req, res, next) => {
-  if (req.path === "/discord" || req.path.startsWith("/discord/")) return next();
+  if (publicApiPrefixes.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`))) return next();
   const token = req.cookies[sessionCookie];
   if (!token) return res.status(401).json({ code: "APP_SESSION_REQUIRED", error: "Please sign in to continue." });
   const session = authDb.prepare("SELECT username FROM access_sessions WHERE token_hash = ? AND expires_at > ?")
