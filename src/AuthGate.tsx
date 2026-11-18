@@ -362,6 +362,7 @@ function DownloadPageMusic() {
 export default function AuthGate() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [showDownloadPage, setShowDownloadPage] = useState(() => window.location.pathname === "/download");
+  const [showLoginScreen, setShowLoginScreen] = useState(() => window.location.pathname === "/login");
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -373,9 +374,11 @@ export default function AuthGate() {
     fetch("/api/access/session", { credentials: "same-origin" })
       .then((response) => response.json())
       .then((result: SessionState) => {
-        if (result.authenticated) {
-          window.history.replaceState(null, "", "/download");
-          setShowDownloadPage(true);
+        // The cord layout is the landing view, so signing in never throws the
+        // reader onto the download page; only a stale /login route moves back.
+        if (result.authenticated && window.location.pathname === "/login") {
+          window.history.replaceState(null, "", "/");
+          setShowLoginScreen(false);
         }
         setSession(result);
       })
@@ -395,8 +398,9 @@ export default function AuthGate() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not sign in.");
-      window.history.replaceState(null, "", "/download");
-      setShowDownloadPage(true);
+      window.history.replaceState(null, "", "/");
+      setShowDownloadPage(false);
+      setShowLoginScreen(false);
       setSession(result);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not sign in. Try again.");
@@ -415,17 +419,30 @@ export default function AuthGate() {
 
   if (!session) return <main className="access-loading"><span className="access-spinner" />Checking access…</main>;
 
-  if (session.authenticated) {
+  const openApp = () => {
+    window.history.replaceState(null, "", "/");
+    setShowDownloadPage(false);
+    setShowLoginScreen(false);
+  };
+  const openDownloadPage = () => {
+    window.history.replaceState(null, "", "/download");
+    setShowDownloadPage(true);
+    setShowLoginScreen(false);
+  };
+
+  if (session.authenticated || showDownloadPage) {
     return <>
+      {session.authenticated && (
       <button className="access-signout" onClick={logout} type="button" title={`Signed in as ${session.username}`}>
         <span aria-hidden="true">←</span> SIGN OUT
       </button>
+      )}
       {showDownloadPage ? (
         <main className="download-screen">
           <DownloadPageMusic />
           <section className="download-card" aria-labelledby="download-title">
             <div className="access-mark" aria-hidden="true"><span>SC</span></div>
-            <div className="access-kicker">ACCOUNT READY · LIVE UPDATE BUILD</div>
+            <div className="access-kicker">{session.authenticated ? "ACCOUNT READY · LIVE UPDATE BUILD" : "LIVE UPDATE BUILD"}</div>
             <h1 id="download-title">Download SlendoCord</h1>
             <p className="download-copy">
               Get the Windows app in one file. It includes the runtime and checks for published module updates when you open it.
@@ -434,16 +451,13 @@ export default function AuthGate() {
               Download SlendoCord.exe
             </a>
             <p className="download-note">No separate Node.js installation or project folder is needed. Internet access is required to check for updates.</p>
-            <div className="download-divider"><span>OR PREVIEW IN YOUR BROWSER</span></div>
+            <div className="download-divider"><span>OR USE IT RIGHT HERE IN YOUR BROWSER</span></div>
             <button
               className="download-preview"
               type="button"
-              onClick={() => {
-                window.history.replaceState(null, "", "/");
-                setShowDownloadPage(false);
-              }}
+              onClick={openApp}
             >
-              Preview Cord
+              Open Cord
             </button>
           </section>
           <div className="access-footer">SLENDO CORD <span>—</span> DOWNLOAD & PREVIEW</div>
@@ -452,6 +466,7 @@ export default function AuthGate() {
     </>;
   }
 
+  if (showLoginScreen) {
   const isSignup = mode === "signup";
   return (
     <main className="access-screen">
@@ -493,4 +508,12 @@ export default function AuthGate() {
       <div className="access-footer">SLENDO CORD <span>—</span> PRIVATE TEST BUILD</div>
     </main>
   );
+  }
+
+  return <>
+    <button className="access-signout" onClick={openDownloadPage} type="button" title="Download the Windows app">
+      <span aria-hidden="true">↓</span> DOWNLOAD
+    </button>
+    <CordApp />
+  </>;
 }
