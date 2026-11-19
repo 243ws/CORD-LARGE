@@ -176,6 +176,43 @@ const normalizeDiscordToken = (raw: string): string => {
   return value;
 };
 
+// A working token is kept on the reader's own machine so a refresh does not cost
+// another paste. It never leaves the browser except as an Authorization header.
+const TOKEN_STORAGE_KEY = 'slando-cord.token';
+
+const readStoredToken = (): string => {
+  try {
+    return normalizeDiscordToken(window.localStorage.getItem(TOKEN_STORAGE_KEY) || '');
+  } catch {
+    return '';
+  }
+};
+
+const rememberToken = (value: string) => {
+  try {
+    if (value) window.localStorage.setItem(TOKEN_STORAGE_KEY, value);
+    else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Private mode and blocked storage just mean the token is not remembered.
+  }
+};
+
+// Discord reads a bot token as "Bot <token>" and a user token as the bare value,
+// and a pasted string can be either kind. Stripping the prefix from a bot token
+// and adding it to a user token both earn a 401, which reads as "this token is
+// bad" when the token is fine. So the first 401 is answered once with the other
+// spelling, and whichever spelling worked is reused for the rest of the session.
+type AuthSpelling = 'raw' | 'bot';
+
+let knownSpelling: AuthSpelling | null = null;
+let proxyBlockedUntil = 0;
+
+const withSpelling = (value: string, spelling: AuthSpelling) =>
+  spelling === 'bot' ? `Bot ${value.replace(/^bot\s+/i, '')}` : value.replace(/^bot\s+/i, '');
+
+const isDiscordJson = (res: Response) =>
+  (res.headers.get('content-type') || '').includes('application/json');
+
 // Discord API request dispatcher: Proxies through /api/discord/* in browser to bypass CORS restrictions
 // ensuring pure web/HTML execution with zero need for external .exe, desktop daemons, or key systems.
 const discordFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
@@ -186,43 +223,64 @@ const discordFetch = async (url: string, init: RequestInit = {}): Promise<Respon
     targetUrl = url.replace('https://discord.com/api/v9', '/api/discord');
   }
 
-  let requestInit = init;
-  if (init.headers) {
-    const headers = new Headers(init.headers as HeadersInit);
-    const sent = headers.get('Authorization');
-    if (sent) {
-      const cleaned = normalizeDiscordToken(sent);
-      if (cleaned !== sent) {
-        headers.set('Authorization', cleaned);
-        requestInit = { ...init, headers };
+  const baseHeaders = new Headers(init.headers as HeadersInit);
+  const sent = baseHeaders.get('Authorization');
+  const base = sent ? normalizeDiscordToken(sent) : '';
+  if (sent) baseHeaders.set('Authorization', base);
+
+  const dial = async (spelling: AuthSpelling): Promise<Response> => {
+    const headers = new Headers(baseHeaders);
+    if (base) headers.set('Authorization', withSpelling(base, spelling));
+    const requestInit: RequestInit = { ...init, headers };
+    const direct = () => fetch(url, requestInit);
+
+    if (targetUrl === url) return direct();
+
+    // The host's shared IP gets edge-blocked by Discord for minutes at a time, so a
+    // recent block is remembered and the browser goes straight to Discord instead of
+    // paying for a proxy round trip that will fail.
+    if (Date.now() < proxyBlockedUntil) {
+      try {
+        return await direct();
+      } catch {
+        // The reader's connection failed too; fall through to the proxy.
       }
     }
-  }
 
-  try {
-    const res = await fetch(targetUrl, requestInit);
-    if (targetUrl !== url) {
-      // Discord always answers JSON, so an HTML body or a failed status came from the
-      // host or its CDN rather than from Discord: a 404/502 on the proxy itself, or an
-      // edge block page when the host's shared IP is throttled. Those must never be
-      // reported as a bad token, so the same call is retried straight from the browser
-      // on the reader's own connection, and only its answer is believed.
-      const contentType = res.headers.get('content-type') || '';
-      if (!res.ok || contentType.includes('text/html')) {
-        try {
-          return await fetch(url, requestInit);
-        } catch {
-          return res;
-        }
+    let res: Response;
+    try {
+      res = await fetch(targetUrl, requestInit);
+    } catch {
+      return direct();
+    }
+
+    // Discord always answers JSON, so an HTML body or a 502 came from the host or its
+    // CDN rather than from Discord. Those must never be reported as a bad token, so the
+    // same call is retried straight from the browser and only its answer is believed.
+    const contentType = res.headers.get('content-type') || '';
+    if (!isDiscordJson(res) || contentType.includes('text/html') || res.status === 502) {
+      proxyBlockedUntil = Date.now() + 5 * 60_000;
+      try {
+        return await direct();
+      } catch {
+        return res;
       }
     }
     return res;
-  } catch {
-    if (targetUrl !== url) {
-      return await fetch(url, requestInit);
-    }
-    throw new Error('Network error during Discord API request');
+  };
+
+  const first: AuthSpelling = knownSpelling || 'raw';
+  const second: AuthSpelling = first === 'bot' ? 'raw' : 'bot';
+
+  let res = await dial(first);
+  if (base && res.status === 401) {
+    const retry = await dial(second);
+    if (retry.status !== 401) knownSpelling = second;
+    res = retry;
+  } else if (base && res.ok) {
+    knownSpelling = first;
   }
+  return res;
 };
 
 export function CordApp() {
@@ -270,7 +328,7 @@ export function CordApp() {
       return next;
     });
   }, []);
-  const [token, setToken] = useState('');
+  const [token, setToken] = useState(() => readStoredToken());
   const [tokenStatus, setTokenStatus] = useState<
     'idle' | 'checking' | 'connected' | 'rejected' | 'session-expired' | 'unavailable'
   >('idle');
@@ -2835,7 +2893,11 @@ export function CordApp() {
               <input 
                 type="password"
                 value={token}
-                onChange={(e) => setToken(normalizeDiscordToken(e.target.value))}
+                onChange={(e) => {
+                  const next = normalizeDiscordToken(e.target.value);
+                  setToken(next);
+                  rememberToken(next);
+                }}
                 placeholder="Enter Discord Token..."
                 className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 transition-colors"
               />
@@ -2853,7 +2915,7 @@ export function CordApp() {
                 >
                   {tokenStatus === 'checking' && 'Checking Discord connection…'}
                   {tokenStatus === 'connected' && 'Discord account connected.'}
-                  {tokenStatus === 'rejected' && 'Discord rejected this token (401). Copy it again from a fresh login.'}
+                  {tokenStatus === 'rejected' && 'Discord rejected this token (401). It has expired or was revoked. Copy a fresh one from the browser where you are logged in: F12, Network, any request, the Authorization header.'}
                   {tokenStatus === 'session-expired' && 'App sign-in expired; sign in again to use the proxy.'}
                   {tokenStatus === 'unavailable' && 'Could not reach Discord from this browser. Check your connection and try again.'}
                 </p>
