@@ -362,7 +362,6 @@ function DownloadPageMusic() {
 export default function AuthGate() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [showDownloadPage, setShowDownloadPage] = useState(() => window.location.pathname === "/download");
-  const [showLoginScreen, setShowLoginScreen] = useState(() => window.location.pathname === "/login");
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -374,11 +373,10 @@ export default function AuthGate() {
     fetch("/api/access/session", { credentials: "same-origin" })
       .then((response) => response.json())
       .then((result: SessionState) => {
-        // The cord layout is the landing view, so signing in never throws the
-        // reader onto the download page; only a stale /login route moves back.
+        // The login gate is the landing view again: a reader already signed in
+        // who still holds a stale /login URL goes back to the cord at the root.
         if (result.authenticated && window.location.pathname === "/login") {
           window.history.replaceState(null, "", "/");
-          setShowLoginScreen(false);
         }
         setSession(result);
       })
@@ -400,7 +398,6 @@ export default function AuthGate() {
       if (!response.ok) throw new Error(result.error || "Could not sign in.");
       window.history.replaceState(null, "", "/");
       setShowDownloadPage(false);
-      setShowLoginScreen(false);
       setSession(result);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not sign in. Try again.");
@@ -422,12 +419,6 @@ export default function AuthGate() {
   const openApp = () => {
     window.history.replaceState(null, "", "/");
     setShowDownloadPage(false);
-    setShowLoginScreen(false);
-  };
-  const openDownloadPage = () => {
-    window.history.replaceState(null, "", "/download");
-    setShowDownloadPage(true);
-    setShowLoginScreen(false);
   };
 
   if (session.authenticated || showDownloadPage) {
@@ -466,7 +457,6 @@ export default function AuthGate() {
     </>;
   }
 
-  if (showLoginScreen) {
   const isSignup = mode === "signup";
   return (
     <main className="access-screen">
@@ -508,12 +498,4 @@ export default function AuthGate() {
       <div className="access-footer">SLENDO CORD <span>—</span> PRIVATE TEST BUILD</div>
     </main>
   );
-  }
-
-  return <>
-    <button className="access-signout" onClick={openDownloadPage} type="button" title="Download the Windows app">
-      <span aria-hidden="true">↓</span> DOWNLOAD
-    </button>
-    <CordApp />
-  </>;
 }
