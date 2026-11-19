@@ -154,6 +154,28 @@ class ErrorBoundary extends (React.Component as any) {
   }
 }
 
+// A token copied from a client, a browser devtools pane or a notes app usually
+// arrives wrapped in something: a trailing newline, quotes, an "Authorization:"
+// label, a "Bot"/"Bearer" prefix, or a whole email:password:token line. Discord
+// answers every one of those with a 401, which reads to the user as a rejected
+// token, so the value is cleaned once, at the point it enters the app.
+const looksLikeDiscordToken = (value: string) =>
+  /^[\w-]{20,}\.[\w-]{5,}\.[\w-]{20,}$/.test(value) || /^mfa\.[\w-]{20,}$/.test(value);
+
+const normalizeDiscordToken = (raw: string): string => {
+  let value = (raw || '').replace(/[\r\n\t]+/g, ' ').trim();
+  if (!value) return '';
+  value = value.replace(/^authorization\s*:\s*/i, '').trim();
+  value = value.replace(/^(bot|bearer)\s+/i, '').trim();
+  value = value.replace(/^["'`<>]+/, '').replace(/["'`<>]+$/, '').trim();
+  if (value.includes('@') && value.includes(':')) {
+    const parts = value.split(':');
+    const candidate = (parts[parts.length - 1] || '').trim();
+    if (parts.length > 1 && looksLikeDiscordToken(candidate)) value = candidate;
+  }
+  return value;
+};
+
 // Discord API request dispatcher: Proxies through /api/discord/* in browser to bypass CORS restrictions
 // ensuring pure web/HTML execution with zero need for external .exe, desktop daemons, or key systems.
 const discordFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
@@ -164,16 +186,40 @@ const discordFetch = async (url: string, init: RequestInit = {}): Promise<Respon
     targetUrl = url.replace('https://discord.com/api/v9', '/api/discord');
   }
 
+  let requestInit = init;
+  if (init.headers) {
+    const headers = new Headers(init.headers as HeadersInit);
+    const sent = headers.get('Authorization');
+    if (sent) {
+      const cleaned = normalizeDiscordToken(sent);
+      if (cleaned !== sent) {
+        headers.set('Authorization', cleaned);
+        requestInit = { ...init, headers };
+      }
+    }
+  }
+
   try {
-    const res = await fetch(targetUrl, init);
-    // If proxy responds with 502 or 404 on proxy itself, fallback to direct fetch
-    if ((res.status === 502 || res.status === 404) && targetUrl !== url) {
-      return await fetch(url, init);
+    const res = await fetch(targetUrl, requestInit);
+    if (targetUrl !== url) {
+      // Discord always answers JSON, so an HTML body or a failed status came from the
+      // host or its CDN rather than from Discord: a 404/502 on the proxy itself, or an
+      // edge block page when the host's shared IP is throttled. Those must never be
+      // reported as a bad token, so the same call is retried straight from the browser
+      // on the reader's own connection, and only its answer is believed.
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || contentType.includes('text/html')) {
+        try {
+          return await fetch(url, requestInit);
+        } catch {
+          return res;
+        }
+      }
     }
     return res;
   } catch {
     if (targetUrl !== url) {
-      return await fetch(url, init);
+      return await fetch(url, requestInit);
     }
     throw new Error('Network error during Discord API request');
   }
@@ -870,6 +916,15 @@ export function CordApp() {
         if (!cancelled) setTokenStatus('session-expired');
         return true;
       };
+      // Only Discord's own 401 JSON means "this token is bad". A host or CDN block
+      // page carries a 401-looking status without that body, and must not be shown
+      // to the reader as a rejected token.
+      const isTokenRejection = async (response: Response) => {
+        if (response.status !== 401) return false;
+        if ((response.headers.get('content-type') || '').includes('text/html')) return false;
+        const body = await response.clone().json().catch(() => null);
+        return Boolean(body && typeof body.message === 'string');
+      };
       try {
         const userRes = await fetch('https://discord.com/api/v9/users/@me', {
           headers: { 'Authorization': token }
@@ -887,11 +942,7 @@ export function CordApp() {
           setUserId('');
           if (await isAppSessionFailure(userRes)) return;
           if (cancelled) return;
-          if (userRes.status === 401) {
-            setTokenStatus('rejected');
-          } else {
-            setTokenStatus('unavailable');
-          }
+          setTokenStatus((await isTokenRejection(userRes)) ? 'rejected' : 'unavailable');
           return;
         }
 
@@ -2784,7 +2835,7 @@ export function CordApp() {
               <input 
                 type="password"
                 value={token}
-                onChange={(e) => setToken(e.target.value)}
+                onChange={(e) => setToken(normalizeDiscordToken(e.target.value))}
                 placeholder="Enter Discord Token..."
                 className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 transition-colors"
               />
@@ -2802,9 +2853,9 @@ export function CordApp() {
                 >
                   {tokenStatus === 'checking' && 'Checking Discord connection…'}
                   {tokenStatus === 'connected' && 'Discord account connected.'}
-                  {tokenStatus === 'rejected' && 'Discord returned 401 for this token.'}
+                  {tokenStatus === 'rejected' && 'Discord rejected this token (401). Copy it again from a fresh login.'}
                   {tokenStatus === 'session-expired' && 'App sign-in expired; sign in again to use the proxy.'}
-                  {tokenStatus === 'unavailable' && 'Could not verify the token: the API or proxy request failed.'}
+                  {tokenStatus === 'unavailable' && 'Could not reach Discord from this browser. Check your connection and try again.'}
                 </p>
               )}
             </div>
